@@ -13,7 +13,7 @@ SupoClip turns long-form videos into short clips. Users can:
 - Review and edit generated clips
 - Download clips for publishing
 
-Depending on configuration, users may also see hosted billing, usage limits, or admin tooling.
+By default (`REQUIRE_AUTH=false`) SupoClip runs local-first: there is no login, no `/sign-in`/`/sign-up`, and no admin dashboard — every request resolves to a single implicit local user. Setting `REQUIRE_AUTH=true` (hosted deployments) restores multi-tenant auth and, depending on configuration, hosted billing and usage limits.
 
 ## Main Screens
 
@@ -105,39 +105,23 @@ Editing actions exposed in the UI map to backend operations:
 
 ### Settings: `/settings`
 
-The settings page stores user defaults and exposes billing actions when monetization is enabled.
+The settings page stores user defaults and exposes billing actions when monetization is enabled. It's organized into Transcription, Hooks, Export, UI (subtitle appearance), Notifications, Advanced, Developer, and Billing sections.
 
 Users can:
 
 - Set default font family
 - Set default font size
 - Set default font color
-- Open checkout or billing portal flows
-- Sign out
+- Open checkout or billing portal flows (hosted mode only)
+- Sign out (hosted mode only)
 
 The page also loads billing summary data so the user can see plan and usage information.
 
-### Auth Screens
+**Every non-secret setting shows its current effective value** (admin-saved or env-sourced) next to its label — only API keys stay hidden. Changes **auto-save** a moment after you stop editing; there's no separate "Save" button to remember to click. The per-task "Project Settings" panel on a task page works the same way for that task's own styling — settings persist automatically, while the "Apply to All Clips" button remains a separate, explicit action since it re-renders every clip and can take a few minutes.
 
-- `/sign-in`
-- `/sign-up`
+### Auth and Admin (Hosted Mode Only)
 
-SupoClip uses Better Auth with an email and password flow backed by PostgreSQL through Prisma.
-
-If `DISABLE_SIGN_UP=true`, sign-up is disabled for new users.
-
-### Admin Dashboard: `/admin`
-
-The admin area is available to users with `is_admin=true`.
-
-It includes:
-
-- User counts and platform metrics
-- Active task visibility
-- Recent generations
-- Per-user generation stats
-- Admin status toggles for users
-- YouTube auth management tools
+There are currently no `/sign-in`, `/sign-up`, or `/admin` pages in the frontend — those are legacy/hosted-mode concerns that have been removed from the self-hosted app. In hosted mode (`REQUIRE_AUTH=true`), SupoClip uses Better Auth with an email and password flow backed by PostgreSQL through Prisma, and `DISABLE_SIGN_UP=true` disables sign-up for new users.
 
 ### Feedback
 
@@ -147,19 +131,21 @@ The app includes feedback submission plumbing via frontend API routes and backen
 
 ### 1. Create a task
 
-1. Sign in.
-2. Open `/`.
-3. Choose YouTube or upload mode.
-4. Configure caption and styling preferences.
-5. Submit the task.
+1. Open `/` (no sign-in required by default).
+2. Choose YouTube or upload mode.
+3. Configure caption and styling preferences, including the Retention tab's target clip length and clip count (both are hints the AI selection step aims for, not hard guarantees).
+4. Submit the task.
 
-The frontend sends the request through its authenticated API routes, and the backend creates a task record plus a queued background job.
+The frontend sends the request through its API routes, and the backend creates a task record plus a queued background job.
+
+**Batch uploads**: dropping or selecting more than one file in Upload mode queues all of them — they upload and get created as separate tasks one at a time (sequentially, so a large batch doesn't saturate the upload endpoint), each with its own per-item status in the queue list, then all land in `/list` where the worker processes them independently.
 
 ### 2. Monitor progress
 
 1. Open the task page.
-2. Watch live progress from the backend SSE stream.
+2. Watch live progress from the backend SSE stream — a stage stepper (Download → Transcribe → Analyze → Render → Done) plus a percentage bar, and per-clip "rendering clip i/N" status as each clip is produced.
 3. Wait for the status to move from `queued` to `processing` to `completed`.
+4. The task list (`/list`) also shows a live thumbnail (for YouTube sources), inline progress bar, and current stage message for any in-progress task, refreshing automatically every few seconds.
 
 ### 3. Review clips
 
@@ -217,6 +203,17 @@ Custom font upload is also supported through the media API. In monetized setups,
 ### Caption templates
 
 Caption templates are exposed by the backend and loaded into the frontend task creation and editing flows.
+
+### Hook titles
+
+Every clip gets an AI-written on-screen headline ("hook") burned in for its first few seconds. From the task detail page you can:
+
+- Style the hook (font, size, color, background box, position, drop shadow) with a live CSS-approximation preview.
+- Pick an animation style: Fade + Pop, Fade, Slide Down, Zoom Punch, Bounce, or Pulse.
+- Compare hooks (per clip, via the "Compare Hooks" button): generate a few AI-written alternative hook titles for that clip, preview them side-by-side, and pick a winner — or write your own custom hook text. Applying a hook re-renders just that clip (the hook text is burned into the same frame as the crop/captions, so it can't be swapped without a re-render).
+- Optionally override the hook's content-type label (Question, Bold Statement, Data/Stats, Story, Contrast, Callout, Warning, or None) when applying a hook.
+
+`GET /api/tasks/hook-options` lists the current selectable hook types and animation styles.
 
 ### B-roll
 

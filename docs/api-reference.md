@@ -78,7 +78,7 @@ Source file:
 - `GET /`
   - List tasks
 - `POST /`
-  - Create task
+  - Create task. Accepts per-request `max_clips` (1-20, overrides the global `MAX_CLIPS`) and `target_duration_seconds` (15/30/60, overrides `CLIP_DURATION`) that steer AI segment selection for this video specifically, in addition to the existing styling/cleanup fields.
 - `GET /billing/summary`
   - Billing summary for current user
 - `GET /{task_id}`
@@ -110,11 +110,17 @@ Source file:
   - Update caption text or related settings
 - `POST /{task_id}/clips/{clip_id}/regenerate`
   - Re-render a clip
+- `POST /{task_id}/clips/{clip_id}/hook-variants`
+  - Generate 1-6 AI-written alternative hook titles for a clip (for A/B comparison), appended to any previously generated variants
+- `PATCH /{task_id}/clips/{clip_id}/hook-variants/select`
+  - Apply a generated variant (`variant_id`) or custom text (`hook_title`) as the clip's active hook, optionally overriding `hook_type`; re-renders the clip from source since the hook is burned into the frame
 - `GET /{task_id}/clips/{clip_id}/export`
   - Export using a platform preset
 
 ### Task-wide settings and diagnostics
 
+- `GET /hook-options`
+  - List selectable hook types and animation styles (for the hook editor/comparison UI)
 - `POST /{task_id}/settings`
   - Apply project-wide task settings such as fonts or caption template
 - `GET /metrics/performance`
@@ -209,6 +215,8 @@ Important implications:
 - The frontend subscribes with `EventSource`
 - The response stays open while the task is active
 - Redis-backed progress updates can appear live without repeated polling
+- `status`/`progress` events carry a `stage` field (`download`/`transcribe`/`analyze`/`render`/`complete`) for a stage-by-stage UI, alongside the numeric `progress` percentage and free-text `message`
+- A `clip_progress` event fires when a clip starts rendering (before `clip_ready`), carrying `clip_index`/`total_clips`, so the UI can show "rendering clip i/N" ahead of the clip actually being ready
 
 ## Billing and Hosted Mode Notes
 

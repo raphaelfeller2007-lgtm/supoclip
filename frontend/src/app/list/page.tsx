@@ -23,7 +23,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useSession } from "@/lib/auth-client";
+import { LOCAL_USER_ID } from "@/lib/local-user";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
 import { cn } from "@/lib/utils";
 import {
@@ -46,10 +46,22 @@ interface Task {
   source_id: string;
   source_title: string;
   source_type: string;
+  source_url?: string | null;
   status: string;
+  progress?: number;
+  progress_message?: string | null;
   clips_count: number;
   created_at: string;
   updated_at: string;
+}
+
+/** YouTube thumbnail URL derived client-side from the source URL — no backend work needed. */
+function youTubeThumbnailUrl(sourceUrl: string | null | undefined): string | null {
+  if (!sourceUrl) return null;
+  const match = sourceUrl.match(
+    /(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+  );
+  return match ? `https://img.youtube.com/vi/${match[1]}/hqdefault.jpg` : null;
 }
 
 type BatchAction = "cancel" | "resume" | "delete" | null;
@@ -112,7 +124,9 @@ const STATUS_CONFIG: Record<
 };
 
 export default function ListPage() {
-  const { data: session, isPending } = useSession();
+  // Local-first: no login, so there's no real session — kept as a constant so
+  // the existing "session?.user?.id" checks keep working.
+  const session = { user: { id: LOCAL_USER_ID } };
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -159,6 +173,18 @@ export default function ListPage() {
       current.filter((taskId) => nextTasks.some((task) => task.id === taskId)),
     );
   };
+
+  // Lightweight polling so queued/processing rows show live progress without
+  // a full page reload — only runs while something is actually in flight.
+  const hasActiveTasks = tasks.some((task) => ACTIVE_TASK_STATUSES.includes(task.status));
+  useEffect(() => {
+    if (!hasActiveTasks) return;
+    const interval = setInterval(() => {
+      void refreshTasks().catch((err) => console.error("Error polling tasks:", err));
+    }, 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasActiveTasks]);
 
   const selectedTasks = tasks.filter((task) => selectedTaskIds.includes(task.id));
   const selectedCount = selectedTasks.length;
@@ -326,36 +352,6 @@ export default function ListPage() {
 
     setShowDeleteDialog(false);
   };
-
-  /* ── Loading / Auth gates ─────────────────────────────────── */
-
-  if (isPending) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center p-4">
-        <div className="space-y-4">
-          <Skeleton className="h-4 w-32 mx-auto" />
-          <Skeleton className="h-4 w-48 mx-auto" />
-          <Skeleton className="h-4 w-24 mx-auto" />
-        </div>
-      </div>
-    );
-  }
-
-  if (!session?.user) {
-    return (
-      <div className="min-h-screen bg-white">
-        <div className="max-w-4xl mx-auto px-4 py-24 text-center">
-          <h1 className="text-3xl font-bold text-black mb-4">Sign In Required</h1>
-          <p className="text-gray-600 mb-8">
-            You need to be signed in to view your generations.
-          </p>
-          <Link href="/sign-in">
-            <Button size="lg">Sign In</Button>
-          </Link>
-        </div>
-      </div>
-    );
-  }
 
   /* ── Status badge renderer ────────────────────────────────── */
 
@@ -546,6 +542,22 @@ export default function ListPage() {
                       />
                     </div>
 
+                    {/* Thumbnail */}
+                    <div className="hidden sm:block flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden bg-stone-100 border border-stone-200">
+                      {youTubeThumbnailUrl(task.source_url) ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={youTubeThumbnailUrl(task.source_url)!}
+                          alt=""
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-stone-300">
+                          <PlayCircle className="w-6 h-6" />
+                        </div>
+                      )}
+                    </div>
+
                     {/* Content — links to task detail */}
                     <Link href={`/tasks/${task.id}`} className="flex-1 min-w-0">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -567,6 +579,20 @@ export default function ListPage() {
                               {task.clips_count} {task.clips_count === 1 ? "clip" : "clips"}
                             </span>
                           </div>
+                          {ACTIVE_TASK_STATUSES.includes(task.status) && (
+                            <div className="mt-2 max-w-xs">
+                              <div className="flex items-center justify-between text-[11px] text-stone-400 mb-1">
+                                <span className="truncate">{task.progress_message || "Waiting in queue"}</span>
+                                <span className="tabular-nums ml-2 flex-shrink-0">{task.progress ?? 0}%</span>
+                              </div>
+                              <div className="h-1 bg-stone-200 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-stone-800 transition-all duration-700 ease-out"
+                                  style={{ width: `${task.progress ?? 0}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex-shrink-0">

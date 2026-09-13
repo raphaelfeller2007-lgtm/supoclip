@@ -27,9 +27,16 @@ import {
   SheetDescription,
   SheetFooter,
 } from "@/components/ui/sheet";
-import { useSession } from "@/lib/auth-client";
+import { LOCAL_USER_ID } from "@/lib/local-user";
+import { useDebouncedEffect } from "@/lib/use-debounced-effect";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
 import { buildFontOptionsPayload, FONT_SIZE_OPTIONS, FONT_TEMPLATE_DEFAULT_VALUE } from "@/lib/font-options";
+import { DEFAULT_HOOK_STYLE, hookStylePayload, type HookAnimation, type HookPosition, type HookStyle, type HookTitleVariant } from "@/lib/hook-style";
+import { DEFAULT_SOCIAL_OVERLAY, socialOverlayPayload, type SocialOverlay } from "@/lib/retention-settings";
+import { HookTitlePreview } from "@/components/hook-title-preview";
+import { HookVariantCompare } from "@/components/hook-variant-compare";
+import { TemplatePicker, type TemplateInfo } from "@/components/template-picker";
+import { Switch } from "@/components/ui/switch";
 import {
   ArrowLeft,
   Download,
@@ -60,6 +67,23 @@ import DynamicVideoPlayer from "@/components/dynamic-video-player";
 import { TranscriptPreview } from "@/components/transcript-preview";
 import { FontSelectOption, type FontOption } from "@/components/font-select-option";
 
+const PROCESSING_STAGES = [
+  { id: "download", label: "Download" },
+  { id: "transcribe", label: "Transcribe" },
+  { id: "analyze", label: "Analyze" },
+  { id: "render", label: "Render" },
+  { id: "complete", label: "Done" },
+] as const;
+
+/** Fallback stage guess for SSE payloads from before the `stage` field existed. */
+function stageFromProgress(progress: number): string {
+  if (progress >= 100) return "complete";
+  if (progress >= 70) return "render";
+  if (progress >= 50) return "analyze";
+  if (progress >= 30) return "transcribe";
+  return "download";
+}
+
 interface Clip {
   id: string;
   filename: string;
@@ -81,6 +105,8 @@ interface Clip {
   shareability_score: number;
   hook_type: string | null;
   hook_title: string | null;
+  hook_title_variants: HookTitleVariant[];
+  selected_hook_variant_id: string | null;
 }
 
 interface TaskDetails {
@@ -109,13 +135,17 @@ interface TaskDetails {
 export default function TaskPage() {
   const params = useParams();
   const router = useRouter();
-  const { data: session } = useSession();
+  // Local-first: no login, so there's no real session — kept as a constant so
+  // the existing "if (!session?.user?.id) return" guards keep working.
+  const session = { user: { id: LOCAL_USER_ID } };
   const [task, setTask] = useState<TaskDetails | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
+  const [progressStage, setProgressStage] = useState<string | null>(null);
+  const [renderingClip, setRenderingClip] = useState<{ index: number; total: number } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -142,14 +172,21 @@ export default function TaskPage() {
   const [projectPauseThresholdMs, setProjectPauseThresholdMs] = useState("900");
   const [projectRemoveFillerWords, setProjectRemoveFillerWords] = useState(false);
   const [projectFilteredWords, setProjectFilteredWords] = useState("");
+  const [projectHookStyle, setProjectHookStyle] = useState<HookStyle>(DEFAULT_HOOK_STYLE);
+  const updateProjectHookStyle = useCallback(<K extends keyof HookStyle>(key: K, value: HookStyle[K]) => {
+    setProjectHookStyle((current) => ({ ...current, [key]: value }));
+  }, []);
+  const [projectSocialOverlay, setProjectSocialOverlay] = useState<SocialOverlay>(DEFAULT_SOCIAL_OVERLAY);
+  const updateProjectSocialOverlay = useCallback(<K extends keyof SocialOverlay>(key: K, value: SocialOverlay[K]) => {
+    setProjectSocialOverlay((current) => ({ ...current, [key]: value }));
+  }, []);
   const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
   const [availableFonts, setAvailableFonts] = useState<FontOption[]>([]);
   const [deletingFontName, setDeletingFontName] = useState<string | null>(null);
-  const [availableTemplates, setAvailableTemplates] = useState<
-    Array<{ id: string; name: string; description: string; animation: string }>
-  >([]);
+  const [availableTemplates, setAvailableTemplates] = useState<TemplateInfo[]>([]);
   const hasTriggeredAutoRefresh = useRef(false);
+  const lastSavedProjectSettingsRef = useRef<string | null>(null);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const taskApiUrl = "/api/tasks";
@@ -193,14 +230,32 @@ export default function TaskPage() {
 
         const taskData = await taskResponse.json();
         setTask(taskData);
-        setProjectFontFamily(taskData.font_family ?? null);
-        setProjectFontSize(typeof taskData.font_size === "number" ? taskData.font_size : null);
-        setProjectFontColor(taskData.font_color ?? null);
-        setProjectCaptionTemplate(taskData.caption_template || "default");
-        setProjectCutLongPauses(Boolean(taskData.cut_long_pauses));
-        setProjectPauseThresholdMs(String(taskData.pause_threshold_ms || 900));
-        setProjectRemoveFillerWords(Boolean(taskData.remove_filler_words));
-        setProjectFilteredWords((taskData.filtered_words || []).join(", "));
+        const loadedSettings = {
+          projectFontFamily: taskData.font_family ?? null,
+          projectFontSize: typeof taskData.font_size === "number" ? taskData.font_size : null,
+          projectFontColor: taskData.font_color ?? null,
+          projectCaptionTemplate: taskData.caption_template || "default",
+          projectCutLongPauses: Boolean(taskData.cut_long_pauses),
+          projectPauseThresholdMs: String(taskData.pause_threshold_ms || 900),
+          projectRemoveFillerWords: Boolean(taskData.remove_filler_words),
+          projectFilteredWords: (taskData.filtered_words || []).join(", "),
+          projectHookStyle: { ...DEFAULT_HOOK_STYLE, ...(taskData.hook_style || {}) },
+          projectSocialOverlay: { ...DEFAULT_SOCIAL_OVERLAY, ...(taskData.social_overlay || {}) },
+        };
+        setProjectFontFamily(loadedSettings.projectFontFamily);
+        setProjectFontSize(loadedSettings.projectFontSize);
+        setProjectFontColor(loadedSettings.projectFontColor);
+        setProjectCaptionTemplate(loadedSettings.projectCaptionTemplate);
+        setProjectCutLongPauses(loadedSettings.projectCutLongPauses);
+        setProjectPauseThresholdMs(loadedSettings.projectPauseThresholdMs);
+        setProjectRemoveFillerWords(loadedSettings.projectRemoveFillerWords);
+        setProjectFilteredWords(loadedSettings.projectFilteredWords);
+        setProjectHookStyle(loadedSettings.projectHookStyle);
+        setProjectSocialOverlay(loadedSettings.projectSocialOverlay);
+        // Mark this as the "already saved" baseline so the auto-save effect
+        // below doesn't immediately re-save data we just loaded from the
+        // server (fetchTaskStatus runs often — after SSE events, edits, etc).
+        lastSavedProjectSettingsRef.current = JSON.stringify(loadedSettings);
 
         // Fetch clips if task is completed or processing (incremental clips)
         if (taskData.status === "completed" || taskData.status === "processing") {
@@ -305,6 +360,7 @@ export default function TaskPage() {
       console.log("📊 Status:", data);
       setProgress(data.progress || 0);
       setProgressMessage(data.message || "");
+      if (data.stage) setProgressStage(data.stage);
 
       if (data.status === "completed") {
         void fetchTaskStatus().then(() => triggerAutoRefresh());
@@ -316,6 +372,7 @@ export default function TaskPage() {
       console.log("📈 Progress:", data);
       setProgress(data.progress || 0);
       setProgressMessage(data.message || "");
+      if (data.stage) setProgressStage(data.stage);
 
       // Update task status if provided
       if (data.status) {
@@ -327,9 +384,16 @@ export default function TaskPage() {
       }
     });
 
+    eventSource.addEventListener("clip_progress", (e) => {
+      const data = JSON.parse(e.data);
+      console.log("🎞️ Clip rendering:", data.clip_index + 1, "/", data.total_clips);
+      setRenderingClip({ index: data.clip_index, total: data.total_clips });
+    });
+
     eventSource.addEventListener("clip_ready", (e) => {
       const data = JSON.parse(e.data);
       console.log("🎬 Clip ready:", data.clip_index + 1, "/", data.total_clips);
+      setRenderingClip(null);
       if (data.clip) {
         setClips((prev) => {
           const exists = prev.some((c: Clip) => c.id === data.clip.id);
@@ -556,20 +620,19 @@ export default function TaskPage() {
     await fetchTaskStatus();
   };
 
-  const handleApplyProjectSettings = async () => {
-    if (!session?.user?.id || !params.id) return;
-    const fontOptions = buildFontOptionsPayload(projectFontFamily, projectFontSize, projectFontColor);
-    const parsedPauseThreshold = Number(projectPauseThresholdMs || "900");
-    const safePauseThreshold = Number.isFinite(parsedPauseThreshold)
-      ? Math.max(250, Math.min(3000, Math.round(parsedPauseThreshold)))
-      : 900;
-    const normalizedFilteredWords = projectFilteredWords
-      .split(",")
-      .map((word) => word.trim().toLowerCase())
-      .filter(Boolean);
+  const saveProjectSettings = useCallback(
+    async (applyToExisting: boolean) => {
+      if (!session?.user?.id || !params.id) return;
+      const fontOptions = buildFontOptionsPayload(projectFontFamily, projectFontSize, projectFontColor);
+      const parsedPauseThreshold = Number(projectPauseThresholdMs || "900");
+      const safePauseThreshold = Number.isFinite(parsedPauseThreshold)
+        ? Math.max(250, Math.min(3000, Math.round(parsedPauseThreshold)))
+        : 900;
+      const normalizedFilteredWords = projectFilteredWords
+        .split(",")
+        .map((word) => word.trim().toLowerCase())
+        .filter(Boolean);
 
-    setIsApplyingSettings(true);
-    try {
       const response = await fetch(`${taskApiUrl}/${params.id}/settings`, {
         method: "POST",
         headers: {
@@ -582,18 +645,65 @@ export default function TaskPage() {
           pause_threshold_ms: safePauseThreshold,
           remove_filler_words: projectRemoveFillerWords,
           filtered_words: normalizedFilteredWords,
-          apply_to_existing: true,
+          hook_style: hookStylePayload(projectHookStyle),
+          social_overlay: socialOverlayPayload(projectSocialOverlay),
+          apply_to_existing: applyToExisting,
         }),
       });
       if (!response.ok) {
-        alert(await buildSupportError(response, "Failed to apply settings"));
-        return;
+        throw new Error(await buildSupportError(response, "Failed to save settings"));
       }
       await fetchTaskStatus();
+    },
+    [
+      session?.user?.id, params.id, taskApiUrl, projectFontFamily, projectFontSize, projectFontColor,
+      projectPauseThresholdMs, projectFilteredWords, projectCaptionTemplate, projectCutLongPauses,
+      projectRemoveFillerWords, projectHookStyle, projectSocialOverlay, buildSupportError, fetchTaskStatus,
+    ],
+  );
+
+  const handleApplyProjectSettings = async () => {
+    setIsApplyingSettings(true);
+    try {
+      await saveProjectSettings(true);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to apply settings");
     } finally {
       setIsApplyingSettings(false);
     }
   };
+
+  // Auto-save the settings themselves (cheap: just persists to the task's
+  // metadata) shortly after the user stops editing — separate from "Apply to
+  // All Clips", which re-renders every clip and stays an explicit action
+  // since it's expensive (can take minutes for several clips).
+  const [autoSaveState, setAutoSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  useDebouncedEffect(
+    () => {
+      const snapshot = JSON.stringify({
+        projectFontFamily, projectFontSize, projectFontColor, projectCaptionTemplate,
+        projectCutLongPauses, projectPauseThresholdMs, projectRemoveFillerWords, projectFilteredWords,
+        projectHookStyle, projectSocialOverlay,
+      });
+      // fetchTaskStatus (SSE events, other edits) reloads these same states
+      // from the server — skip re-saving when nothing actually changed.
+      if (snapshot === lastSavedProjectSettingsRef.current) return;
+
+      setAutoSaveState("saving");
+      saveProjectSettings(false)
+        .then(() => {
+          lastSavedProjectSettingsRef.current = snapshot;
+          setAutoSaveState("saved");
+        })
+        .catch(() => setAutoSaveState("error"));
+    },
+    [
+      projectFontFamily, projectFontSize, projectFontColor, projectCaptionTemplate,
+      projectCutLongPauses, projectPauseThresholdMs, projectRemoveFillerWords, projectFilteredWords,
+      projectHookStyle, projectSocialOverlay,
+    ],
+    1000,
+  );
 
   const handleDeleteFont = async (font: FontOption) => {
     if (font.scope !== "user" || deletingFontName) return;
@@ -971,6 +1081,40 @@ export default function TaskPage() {
                   <p className="text-[11px] text-neutral-400 text-center mt-3 tabular-nums">{progress}%</p>
                 </div>
               )}
+
+              {/* Stage stepper */}
+              <div className="flex items-center gap-1.5 mt-6">
+                {PROCESSING_STAGES.map((s, idx) => {
+                  const currentIdx = PROCESSING_STAGES.findIndex(
+                    (st) => st.id === (progressStage ?? stageFromProgress(progress)),
+                  );
+                  const state = idx < currentIdx ? "done" : idx === currentIdx ? "current" : "pending";
+                  return (
+                    <div key={s.id} className="flex items-center gap-1.5">
+                      <span
+                        className={`text-[11px] px-2 py-1 rounded-full border transition-colors ${
+                          state === "done"
+                            ? "bg-neutral-900 text-white border-neutral-900"
+                            : state === "current"
+                              ? "border-neutral-800 text-neutral-800 font-medium"
+                              : "border-neutral-200 text-neutral-400"
+                        }`}
+                      >
+                        {s.label}
+                      </span>
+                      {idx < PROCESSING_STAGES.length - 1 && (
+                        <span className="w-3 h-px bg-neutral-200" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {renderingClip && (
+                <p className="text-[11px] text-neutral-400 mt-3">
+                  Rendering clip {renderingClip.index + 1} of {renderingClip.total}…
+                </p>
+              )}
             </div>
 
             {/* Live clips grid — shows clips as they render */}
@@ -978,6 +1122,7 @@ export default function TaskPage() {
               <div className="grid gap-6">
                 <p className="text-sm text-neutral-500 text-center">
                   {clips.length} clip{clips.length !== 1 ? "s" : ""} ready
+                  {renderingClip ? ` · rendering ${renderingClip.index + 1}/${renderingClip.total}` : ""}
                 </p>
                 {clips.map((clip) => (
                   <Card key={clip.id} className="overflow-hidden">
@@ -1103,7 +1248,7 @@ export default function TaskPage() {
             </div>
 
             <Sheet open={settingsSheetOpen} onOpenChange={setSettingsSheetOpen}>
-              <SheetContent side="right" className="sm:max-w-md overflow-y-auto">
+              <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
                 <SheetHeader>
                   <SheetTitle className="flex items-center gap-2">
                     <Settings2 className="w-4 h-4" />
@@ -1192,24 +1337,163 @@ export default function TaskPage() {
 
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-gray-500">Caption Template</label>
-                    <Select value={projectCaptionTemplate} onValueChange={setProjectCaptionTemplate}>
-                      <SelectTrigger>
-                        <SelectValue>
-                          {availableTemplates.find((t) => t.id === projectCaptionTemplate)?.name || "Select style"}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableTemplates.map((template) => (
-                          <SelectItem key={template.id} value={template.id}>
-                            <div>
-                              <div className="font-medium">{template.name}</div>
-                              <div className="text-xs text-gray-500">{template.description}</div>
-                            </div>
-                          </SelectItem>
+                    <TemplatePicker
+                      templates={availableTemplates}
+                      selectedId={projectCaptionTemplate}
+                      onSelect={setProjectCaptionTemplate}
+                    />
+                  </div>
+
+                  <div className="rounded-lg border bg-gray-50 p-3 space-y-3">
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">Hook title</div>
+                      <div className="text-xs text-gray-500">Style of the AI-written headline burned in for the first few seconds.</div>
+                    </div>
+
+                    <HookTitlePreview style={projectHookStyle} captionTemplate={projectCaptionTemplate} availableTemplates={availableTemplates} />
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-gray-500">Size</label>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {[
+                          { label: "Small", value: 0.65 },
+                          { label: "Default", value: null },
+                          { label: "Large", value: 1.0 },
+                          { label: "XL", value: 1.3 },
+                        ].map((option) => (
+                          <button
+                            key={option.label}
+                            type="button"
+                            onClick={() => updateProjectHookStyle("hook_font_size_scale", option.value)}
+                            className={`px-2 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                              projectHookStyle.hook_font_size_scale === option.value
+                                ? "bg-gray-900 text-white border-gray-900"
+                                : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
                         ))}
-                        {availableTemplates.length === 0 && <SelectItem value="default">Default</SelectItem>}
-                      </SelectContent>
-                    </Select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-500">Text color</label>
+                        <input
+                          type="color"
+                          value={projectHookStyle.hook_font_color ?? "#FFFFFF"}
+                          onChange={(e) => updateProjectHookStyle("hook_font_color", e.target.value)}
+                          className="w-full h-8 rounded border border-gray-300 cursor-pointer"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-500 flex items-center justify-between">
+                          Background box
+                          <Switch
+                            checked={projectHookStyle.hook_background_color !== null}
+                            onCheckedChange={(checked) =>
+                              updateProjectHookStyle(
+                                "hook_background_color",
+                                checked ? (projectHookStyle.hook_background_color ?? "#00000099") : null,
+                              )
+                            }
+                          />
+                        </label>
+                        {projectHookStyle.hook_background_color !== null && (
+                          <input
+                            type="color"
+                            value={projectHookStyle.hook_background_color.slice(0, 7)}
+                            onChange={(e) => updateProjectHookStyle("hook_background_color", `${e.target.value}99`)}
+                            className="w-full h-8 rounded border border-gray-300 cursor-pointer"
+                          />
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-gray-500">Position</label>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {(["top", "center", "bottom"] as HookPosition[]).map((position) => (
+                          <button
+                            key={position}
+                            type="button"
+                            onClick={() => updateProjectHookStyle("hook_position", position)}
+                            className={`px-2 py-1.5 rounded-md text-xs font-medium border capitalize transition-colors ${
+                              (projectHookStyle.hook_position ?? "top") === position
+                                ? "bg-gray-900 text-white border-gray-900"
+                                : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+                            }`}
+                          >
+                            {position}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-gray-500">Animation</label>
+                      <Select
+                        value={projectHookStyle.hook_animation ?? "fade_pop"}
+                        onValueChange={(value) => updateProjectHookStyle("hook_animation", value as HookAnimation)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fade_pop">Fade + Pop</SelectItem>
+                          <SelectItem value="fade">Fade</SelectItem>
+                          <SelectItem value="slide_down">Slide Down</SelectItem>
+                          <SelectItem value="zoom_punch">Zoom Punch</SelectItem>
+                          <SelectItem value="bounce">Bounce</SelectItem>
+                          <SelectItem value="pulse">Pulse</SelectItem>
+                          <SelectItem value="none">None</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <label className="flex items-center justify-between text-sm text-gray-700">
+                      Drop shadow
+                      <Switch
+                        checked={projectHookStyle.hook_shadow ?? true}
+                        onCheckedChange={(checked) => updateProjectHookStyle("hook_shadow", checked)}
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      className="text-xs text-gray-500 hover:text-gray-700 underline"
+                      onClick={() => setProjectHookStyle(DEFAULT_HOOK_STYLE)}
+                    >
+                      Reset hook styling to template default
+                    </button>
+                  </div>
+
+                  <div className="rounded-lg border bg-gray-50 p-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900">Fake social overlay</div>
+                        <div className="text-xs text-gray-500">Username, verified badge, like/comment counts.</div>
+                      </div>
+                      <Switch
+                        checked={projectSocialOverlay.enabled}
+                        onCheckedChange={(checked) => updateProjectSocialOverlay("enabled", checked)}
+                      />
+                    </div>
+                    {projectSocialOverlay.enabled && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          placeholder="Username"
+                          value={projectSocialOverlay.username}
+                          onChange={(e) => updateProjectSocialOverlay("username", e.target.value)}
+                        />
+                        <Input
+                          placeholder="Likes (24.5K)"
+                          value={projectSocialOverlay.likes}
+                          onChange={(e) => updateProjectSocialOverlay("likes", e.target.value)}
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-lg border bg-gray-50 p-3 space-y-3">
@@ -1262,7 +1546,16 @@ export default function TaskPage() {
                   </div>
                 </div>
 
-                <SheetFooter>
+                <SheetFooter className="gap-2">
+                  <p className="text-xs text-gray-400 text-center" aria-live="polite">
+                    {autoSaveState === "saving"
+                      ? "Saving settings…"
+                      : autoSaveState === "saved"
+                        ? "Settings saved automatically"
+                        : autoSaveState === "error"
+                          ? "Couldn't auto-save settings"
+                          : ""}
+                  </p>
                   <Button
                     className="w-full"
                     onClick={() => {
@@ -1273,6 +1566,9 @@ export default function TaskPage() {
                   >
                     {isApplyingSettings ? "Applying..." : "Apply to All Clips"}
                   </Button>
+                  <p className="text-xs text-gray-400 text-center">
+                    Settings auto-save as you edit; this re-renders every clip with them (can take a few minutes).
+                  </p>
                 </SheetFooter>
               </SheetContent>
             </Sheet>
@@ -1441,6 +1737,19 @@ export default function TaskPage() {
                           <Scissors className="w-4 h-4" />
                           Edit
                         </Button>
+
+                        <HookVariantCompare
+                          taskApiUrl={taskApiUrl}
+                          taskId={String(params.id)}
+                          clipId={clip.id}
+                          currentHookTitle={clip.hook_title}
+                          currentHookType={clip.hook_type}
+                          initialVariants={clip.hook_title_variants || []}
+                          hookStyle={projectHookStyle}
+                          captionTemplate={projectCaptionTemplate}
+                          availableTemplates={availableTemplates}
+                          onApplied={fetchTaskStatus}
+                        />
 
                         <Button
                           size="sm"

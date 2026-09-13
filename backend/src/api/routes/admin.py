@@ -13,6 +13,7 @@ from ...config import get_config
 from ...database import get_db
 from ...runtime_settings import (
     RUNTIME_SETTING_KEYS,
+    decrypt_setting_value,
     encrypt_setting_value,
     get_runtime_setting_rows,
     load_runtime_settings_cache,
@@ -72,6 +73,44 @@ SETTING_METADATA = {
         "description": "Optional B-roll stock footage provider key.",
         "input_type": "password",
     },
+    "TRANSCRIPTION_PROVIDER": {
+        "label": "Transcription provider",
+        "description": "Which service transcribes source video into word-level timestamps.",
+        "input_type": "select",
+        "options": ["assemblyai", "whisper", "youtube_captions"],
+    },
+    "WHISPER_MODEL": {
+        "label": "Whisper model",
+        "description": "Model size used when the transcription provider is whisper.",
+        "input_type": "select",
+        "options": ["tiny", "base", "small", "medium", "large"],
+    },
+    "WHISPER_LANGUAGE": {
+        "label": "Whisper language",
+        "description": "Optional ISO 639-1 language code (e.g. en, es). Leave blank to auto-detect.",
+        "input_type": "text",
+    },
+    "MAX_CLIPS": {
+        "label": "Max clips per task",
+        "description": "Upper bound on how many clips the AI selects from a source video.",
+        "input_type": "text",
+    },
+    "CLIP_DURATION": {
+        "label": "Default clip duration (seconds)",
+        "description": "Target clip length used as a hint during AI segment selection.",
+        "input_type": "text",
+    },
+    "DEFAULT_PROCESSING_MODE": {
+        "label": "Default processing mode",
+        "description": "Processing mode used when a task doesn't specify one.",
+        "input_type": "select",
+        "options": ["fast", "balanced", "quality"],
+    },
+    "FAST_MODE_MAX_CLIPS": {
+        "label": "Fast mode max clips",
+        "description": "Clip cap applied specifically to fast processing mode.",
+        "input_type": "text",
+    },
 }
 
 
@@ -98,11 +137,28 @@ def _setting_status(
     else:
         source = "unset"
 
+    # Never expose secret values back to the client, but every other setting
+    # must show its live effective value so users aren't left guessing what
+    # is actually configured (only the raw input for typing a new value is
+    # blank).
+    current_value: str | None = None
+    if metadata["input_type"] != "password":
+        if source == "admin":
+            encrypted_value = row.get("encrypted_value")
+            if encrypted_value:
+                try:
+                    current_value = decrypt_setting_value(str(encrypted_value))
+                except Exception:
+                    current_value = None
+        elif source == "environment":
+            current_value = env_value
+
     return {
         "key": setting_key,
         "label": metadata["label"],
         "description": metadata["description"],
         "input_type": metadata["input_type"],
+        "options": metadata.get("options"),
         "source": source,
         "configured": has_env or has_admin_value,
         "has_admin_value": has_admin_value,
@@ -110,6 +166,7 @@ def _setting_status(
         "prefer_admin_value": prefer_admin_value,
         "overridden_by_env": has_env and has_admin_value and not prefer_admin_value,
         "updated_at": row.get("updated_at"),
+        "current_value": current_value,
     }
 
 
