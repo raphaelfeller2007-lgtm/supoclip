@@ -18,6 +18,30 @@ MIN_CLIPS_PER_FOLDER = 5
 SELECTION_SIZE = 5
 
 
+def select_from_candidates(
+    clips: List[Dict[str, Any]], count: int = SELECTION_SIZE
+) -> List[Dict[str, Any]]:
+    """Pure selection algorithm, extracted from `select_clips` so it's
+    testable (Testing tab's `ranking.select_clips` stage) without a DB:
+    group candidates by use_count ascending, fill from the lowest-use group
+    first (shuffled within each group) until `count` is reached — "prefer
+    clips with 0 prior uses; if not enough, fall back to least-used"."""
+    clips_by_use: Dict[int, List[Dict[str, Any]]] = {}
+    for clip in clips:
+        clips_by_use.setdefault(clip["use_count"], []).append(clip)
+
+    selected: List[Dict[str, Any]] = []
+    for use_count in sorted(clips_by_use.keys()):
+        group = clips_by_use[use_count]
+        random.shuffle(group)
+        remaining = count - len(selected)
+        selected.extend(group[:remaining])
+        if len(selected) >= count:
+            break
+    random.shuffle(selected)
+    return selected
+
+
 class RankingFolderRepository:
     """Repository for ranking_folders / ranking_folder_clips."""
 
@@ -137,25 +161,10 @@ class RankingFolderRepository:
     async def select_clips(
         db: AsyncSession, folder_id: str, count: int = SELECTION_SIZE
     ) -> List[Dict[str, Any]]:
-        """Random selection preferring least-used clips: group candidates by
-        use_count ascending, fill from the lowest-use group first (shuffled
-        within each group) until `count` is reached — "prefer clips with 0
-        prior uses; if not enough, fall back to least-used" per spec."""
+        """Random selection preferring least-used clips — see
+        `select_from_candidates` for the algorithm itself."""
         clips = await RankingFolderRepository.list_clips(db, folder_id)
-        clips_by_use: Dict[int, List[Dict[str, Any]]] = {}
-        for clip in clips:
-            clips_by_use.setdefault(clip["use_count"], []).append(clip)
-
-        selected: List[Dict[str, Any]] = []
-        for use_count in sorted(clips_by_use.keys()):
-            group = clips_by_use[use_count]
-            random.shuffle(group)
-            remaining = count - len(selected)
-            selected.extend(group[:remaining])
-            if len(selected) >= count:
-                break
-        random.shuffle(selected)
-        return selected
+        return select_from_candidates(clips, count)
 
     @staticmethod
     async def save_text(db: AsyncSession, clip_id: str, text_value: Optional[str]) -> None:

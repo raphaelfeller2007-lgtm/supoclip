@@ -147,6 +147,17 @@ The stack runs locally without Docker too — see [development](docs/development
 make test
 ```
 
+### Testing Tab (dev only)
+
+An isolated pipeline-stage runner, for developers working on SupoClip itself — not part of the end-user product. It lets you run any single pipeline stage (transcribe, detect clips, generate metadata, render, …) on its own, without running the whole pipeline, so you can iterate on one stage without re-paying for transcription or LLM calls on every change.
+
+- **Off by default.** Set `ENABLE_TESTING_TOOL=true` (backend/worker) and `NEXT_PUBLIC_ENABLE_TESTING_TOOL=true` (frontend), then restart, to see the "Testing" tab.
+- **Stub-first.** Every LLM/API-calling stage defaults to canned fixture data — zero network calls, zero cost. Flip a stage to "Real" mode to actually call AssemblyAI/Ollama/Gemini; the tab shows a cost estimate before you do.
+- **Fixtures** live in [`test-fixtures/`](test-fixtures/), pre-seeded so the tab works out of the box; save any run's input/output as a new fixture with one click.
+- **Prior real runs** get cached (see `TEST_ARTIFACT_CACHE_ENABLED`) so you can replay real data through a stage without re-running the pipeline.
+
+Full details (fixture format, cache layout, how to add a stage) are in [CLAUDE.md](CLAUDE.md#testing-tab).
+
 ## License
 
 SupoClip is released under the [AGPL-3.0 License](LICENSE).

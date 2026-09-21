@@ -1,0 +1,16 @@
+{
+  "description": "Three alternative hook titles for a clip about shipping imperfect ideas.",
+  "input": {
+    "clip_text": "So the biggest mistake people make when starting a business is waiting for the perfect idea. I wasted two years looking before I realized the boring, obvious idea was the one that worked.",
+    "current_hook_title": "The #1 Mistake Killing Your Business Idea",
+    "hook_type": "contrast",
+    "count": 3
+  },
+  "output": {
+    "variants": [
+      "Why You're Wasting Years Waiting For The Perfect Idea",
+      "This Founder Wasted 2 Years On One Mistake",
+      "The Business Idea You're Ignoring Might Be The One 👀"
+    ]
+  }
+}

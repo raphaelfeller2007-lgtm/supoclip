@@ -1,0 +1,8 @@
+{
+  "description": "Export the sample clip through the tiktok preset's size-cap re-encode path.",
+  "input": {
+    "media_path": "clipping/media/sample.mp4",
+    "preset": "tiktok",
+    "target_bytes": 500000
+  }
+}

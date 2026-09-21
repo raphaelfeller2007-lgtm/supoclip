@@ -1,6 +1,7 @@
 import type { Tool } from "./types";
 import { clippingTool } from "./clipping";
 import { rankingTool } from "./ranking";
+import { testingTool } from "./testing";
 
 /**
  * Every tool on the platform, in tab display order. No dynamic loading, no
@@ -21,4 +22,11 @@ import { rankingTool } from "./ranking";
  * That's the whole integration surface — nothing else in the shell needs
  * to change.
  */
-export const TOOLS: Tool[] = [clippingTool, rankingTool];
+// The Testing tool is a local-dev tool only — hidden from the tab bar
+// unless NEXT_PUBLIC_ENABLE_TESTING_TOOL=true (mirrors the backend's
+// ENABLE_TESTING_TOOL gate, which 404s every /testing/* route regardless).
+export const TOOLS: Tool[] = [
+  clippingTool,
+  rankingTool,
+  ...(process.env.NEXT_PUBLIC_ENABLE_TESTING_TOOL === "true" ? [testingTool] : []),
+];

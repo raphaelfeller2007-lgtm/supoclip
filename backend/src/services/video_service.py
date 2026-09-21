@@ -36,13 +36,43 @@ from ..clip_source_map import (
 )
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import get_config
+from ..testing.cache import cache_test_artifact
 
 logger = logging.getLogger(__name__)
 UPLOAD_URL_PREFIX = "upload://"
 
 
+def _jsonable(value: Any) -> Any:
+    """Best-effort plain-JSON conversion for objects that may include
+    pydantic models (e.g. TranscriptSegment), for the test-artifact cache."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    return value
+
+
 class VideoService:
     """Service for video processing operations."""
+
+    @staticmethod
+    def _cache_test_artifact_if_enabled(
+        task_id: Optional[str],
+        stage_id: str,
+        input_data: Dict[str, Any],
+        output_data: Dict[str, Any],
+    ) -> None:
+        if not task_id or not get_config().test_artifact_cache_enabled:
+            return
+        cache_test_artifact(
+            task_id,
+            "clipping",
+            stage_id,
+            input_data=_jsonable(input_data),
+            output_data=_jsonable(output_data),
+        )
 
     @staticmethod
     def _ground_segment_text(
@@ -481,6 +511,9 @@ class VideoService:
                     processing_mode=processing_mode,
                     source_url=url if source_type == "youtube" else None,
                 )
+                VideoService._cache_test_artifact_if_enabled(
+                    task_id, "transcribe", {"processing_mode": processing_mode}, {"transcript": transcript}
+                )
 
             # Step 3: AI analysis
             if should_cancel and await should_cancel():
@@ -535,6 +568,16 @@ class VideoService:
                     clip_signals=clip_signals,
                     max_clips=max_clips,
                     target_duration_seconds=target_duration_seconds,
+                )
+                VideoService._cache_test_artifact_if_enabled(
+                    task_id,
+                    "detect_clips",
+                    {"transcript": transcript, "max_clips": max_clips},
+                    {
+                        "summary": relevant_parts.summary,
+                        "key_topics": relevant_parts.key_topics,
+                        "most_relevant_segments": relevant_parts.most_relevant_segments,
+                    },
                 )
 
             # Step 4: Create clips

@@ -1,0 +1,6 @@
+{
+  "description": "The bundled synthetic sample clip (6s, 640x360, tone audio) — always real/local, no stub needed.",
+  "input": {
+    "media_path": "clipping/media/sample.mp4"
+  }
+}

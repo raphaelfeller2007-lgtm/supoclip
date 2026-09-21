@@ -16,6 +16,7 @@ services:
         - NEXT_PUBLIC_DATAFAST_WEBSITE_ID=${NEXT_PUBLIC_DATAFAST_WEBSITE_ID:-}
         - NEXT_PUBLIC_DATAFAST_DOMAIN=${NEXT_PUBLIC_DATAFAST_DOMAIN:-}
         - NEXT_PUBLIC_DATAFAST_ALLOW_LOCALHOST=${NEXT_PUBLIC_DATAFAST_ALLOW_LOCALHOST:-false}
+        - NEXT_PUBLIC_ENABLE_TESTING_TOOL=${ENABLE_TESTING_TOOL:-false}
     container_name: supoclip-frontend
     ports:
       - "127.0.0.1:3001:3107"
@@ -49,6 +50,7 @@ services:
       - NEXT_PUBLIC_DATAFAST_WEBSITE_ID=${NEXT_PUBLIC_DATAFAST_WEBSITE_ID:-}
       - NEXT_PUBLIC_DATAFAST_DOMAIN=${NEXT_PUBLIC_DATAFAST_DOMAIN:-}
       - NEXT_PUBLIC_DATAFAST_ALLOW_LOCALHOST=${NEXT_PUBLIC_DATAFAST_ALLOW_LOCALHOST:-false}
+      - NEXT_PUBLIC_ENABLE_TESTING_TOOL=${ENABLE_TESTING_TOOL:-false}
       - STRIPE_CHECKOUT_URL=${STRIPE_CHECKOUT_URL}
       - STRIPE_CUSTOMER_PORTAL_URL=${STRIPE_CUSTOMER_PORTAL_URL}
       - REVENUECAT_WEBHOOK_AUTH_HEADER=${REVENUECAT_WEBHOOK_AUTH_HEADER}
@@ -91,6 +93,8 @@ services:
       - ./backend/music:/app/music
       - ./backend/assets:/app/assets
       - ./backend/templates:/app/templates
+      - ./test-fixtures:/app/test-fixtures
+      - ./test-artifacts:/app/test-artifacts
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -139,6 +143,10 @@ services:
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3107}
       - DISCORD_FEEDBACK_WEBHOOK_URL=${DISCORD_FEEDBACK_WEBHOOK_URL}
       - DISCORD_SALES_WEBHOOK_URL=${DISCORD_SALES_WEBHOOK_URL}
+      - ENABLE_TESTING_TOOL=${ENABLE_TESTING_TOOL:-false}
+      - TEST_ARTIFACT_CACHE_ENABLED=${TEST_ARTIFACT_CACHE_ENABLED:-true}
+      - TEST_FIXTURES_DIR=/app/test-fixtures
+      - TEST_ARTIFACT_CACHE_DIR=/app/test-artifacts
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -208,6 +216,8 @@ services:
       - ./backend/music:/app/music
       - ./backend/assets:/app/assets
       - ./backend/templates:/app/templates
+      - ./test-fixtures:/app/test-fixtures
+      - ./test-artifacts:/app/test-artifacts
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -253,6 +263,10 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - "SES_FROM_EMAIL=${SES_FROM_EMAIL:-SupoClip <onboarding@example.com>}"
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3107}
+      - ENABLE_TESTING_TOOL=${ENABLE_TESTING_TOOL:-false}
+      - TEST_ARTIFACT_CACHE_ENABLED=${TEST_ARTIFACT_CACHE_ENABLED:-true}
+      - TEST_FIXTURES_DIR=/app/test-fixtures
+      - TEST_ARTIFACT_CACHE_DIR=/app/test-artifacts
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

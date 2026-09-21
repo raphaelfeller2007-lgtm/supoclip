@@ -1,0 +1,7 @@
+{
+  "description": "Saving non-empty text for an input linked to a folder clip should mirror into the folder's saved_text.",
+  "input": {
+    "rank_text": "  My funniest fail  ",
+    "folder_clip_id": "folder-clip-123"
+  }
+}

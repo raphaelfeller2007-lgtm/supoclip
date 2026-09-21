@@ -1,0 +1,9 @@
+{
+  "description": "Sample clip's bundled .transcript_cache.json has two ~1.8s pauses between its three sentences — high sensitivity should cut both.",
+  "input": {
+    "media_path": "clipping/media/sample.mp4",
+    "clip_start": 0,
+    "clip_end": 6,
+    "sensitivity": 90
+  }
+}

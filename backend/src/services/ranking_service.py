@@ -33,6 +33,7 @@ from ..repositories.clip_repository import ClipRepository
 from ..repositories.ranking_folder_repository import RankingFolderRepository
 from ..repositories.ranking_repository import RankingRepository
 from ..repositories.task_repository import TaskRepository
+from ..testing.cache import cache_test_artifact
 from ..utils.async_helpers import run_in_thread
 from ..video_utils import (
     ass_fonts_dir,
@@ -95,6 +96,25 @@ class RankingService:
         inputs = await self.ranking_repo.list_inputs(self.db, task_id)
         if len(inputs) < 2:
             raise ValueError("A ranking compilation needs at least 2 input videos")
+
+        if get_config().test_artifact_cache_enabled:
+            cache_test_artifact(
+                task_id,
+                "ranking",
+                "load",
+                input_data={"task_id": task_id},
+                output_data={
+                    "inputs": [
+                        {
+                            "original_filename": i.get("original_filename"),
+                            "duration_seconds": i.get("duration_seconds"),
+                            "framing": i.get("framing"),
+                            "rank_text": i.get("rank_text"),
+                        }
+                        for i in inputs
+                    ]
+                },
+            )
 
         durations = [float(i["duration_seconds"] or 0.0) for i in inputs]
         longest = max(durations) if durations else 0.0
@@ -173,6 +193,18 @@ class RankingService:
             )
         if not ok:
             raise RuntimeError("Ranking compilation render failed")
+
+        if config.test_artifact_cache_enabled:
+            cache_test_artifact(
+                task_id,
+                "ranking",
+                "render",
+                input_data={
+                    "template_id": template_id,
+                    "input_count": len(ordered),
+                },
+                output_data={"success": ok, "output_path": str(output_path)},
+            )
 
         # Prefer-unused tracking + text memory: a folder clip that was
         # actually used in this rendered ranking gets its use_count bumped

@@ -1,0 +1,48 @@
+{
+  "version": 2,
+  "text": "Hello world. This is a test. Goodbye now.",
+  "words": [
+    {"text": "Hello", "start": 0, "end": 400, "confidence": 0.99, "speaker": null},
+    {"text": "world.", "start": 420, "end": 900, "confidence": 0.99, "speaker": null},
+    {"text": "This", "start": 2700, "end": 2900, "confidence": 0.99, "speaker": null},
+    {"text": "is", "start": 2920, "end": 3000, "confidence": 0.99, "speaker": null},
+    {"text": "a", "start": 3010, "end": 3050, "confidence": 0.99, "speaker": null},
+    {"text": "test.", "start": 3070, "end": 3500, "confidence": 0.99, "speaker": null},
+    {"text": "Goodbye", "start": 5300, "end": 5700, "confidence": 0.99, "speaker": null},
+    {"text": "now.", "start": 5720, "end": 6000, "confidence": 0.99, "speaker": null}
+  ],
+  "utterances": [
+    {
+      "text": "Hello world.",
+      "start": 0,
+      "end": 900,
+      "speaker": null,
+      "words": [
+        {"text": "Hello", "start": 0, "end": 400, "confidence": 0.99, "speaker": null},
+        {"text": "world.", "start": 420, "end": 900, "confidence": 0.99, "speaker": null}
+      ]
+    },
+    {
+      "text": "This is a test.",
+      "start": 2700,
+      "end": 3500,
+      "speaker": null,
+      "words": [
+        {"text": "This", "start": 2700, "end": 2900, "confidence": 0.99, "speaker": null},
+        {"text": "is", "start": 2920, "end": 3000, "confidence": 0.99, "speaker": null},
+        {"text": "a", "start": 3010, "end": 3050, "confidence": 0.99, "speaker": null},
+        {"text": "test.", "start": 3070, "end": 3500, "confidence": 0.99, "speaker": null}
+      ]
+    },
+    {
+      "text": "Goodbye now.",
+      "start": 5300,
+      "end": 6000,
+      "speaker": null,
+      "words": [
+        {"text": "Goodbye", "start": 5300, "end": 5700, "confidence": 0.99, "speaker": null},
+        {"text": "now.", "start": 5720, "end": 6000, "confidence": 0.99, "speaker": null}
+      ]
+    }
+  ]
+}

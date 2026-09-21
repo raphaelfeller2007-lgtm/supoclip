@@ -1,0 +1,7 @@
+{
+  "description": "Hash+probe one of the bundled ranking sample clips.",
+  "input": {
+    "media_path": "ranking/media/clip_a.mp4",
+    "original_filename": "my_clip.mp4"
+  }
+}

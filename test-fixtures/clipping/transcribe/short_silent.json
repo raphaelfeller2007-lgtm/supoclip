@@ -1,0 +1,10 @@
+{
+  "description": "Minimal single-line transcript, useful for testing empty/short-input edge cases downstream.",
+  "input": {
+    "media_path": "clipping/media/sample.mp4",
+    "processing_mode": "fast"
+  },
+  "output": {
+    "transcript": "[00:00 - 00:06] Speaker A: Just a quick test clip, nothing interesting here."
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "description": "Single-clip metadata generation, for testing the lighter per-clip 'Regenerate' path shape.",
+  "input": {
+    "clips": [
+      {"clip_id": "clip-1", "text": "The market will tell you the rest, faster than any amount of planning ever will.", "hook_title": null}
+    ],
+    "video_title": "Startup Lessons"
+  },
+  "output": {
+    "clip-1": {
+      "title": "Let The Market Decide, Not Your Planning",
+      "description": "Why real feedback beats endless planning every time",
+      "tags": ["educational", "startup-advice", "opinion", "business", "productivity"]
+    }
+  }
+}

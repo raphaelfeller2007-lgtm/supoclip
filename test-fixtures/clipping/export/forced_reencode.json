@@ -1,0 +1,8 @@
+{
+  "description": "Target size well under the sample clip's actual size, forcing enforce_size_cap's re-encode path to actually run.",
+  "input": {
+    "media_path": "clipping/media/sample.mp4",
+    "preset": "reels",
+    "target_bytes": 20000
+  }
+}

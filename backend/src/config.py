@@ -159,6 +159,25 @@ class Config:
             self._get_runtime_setting("RANKING_DEFAULT_FRAMING") or "blur_fill"
         )
 
+        # Testing tab (backend/src/testing/) — isolated pipeline-stage runner
+        # for development. Hidden/disabled by default: this is a dev tool,
+        # not something the hosted product should expose to regular users.
+        self.enable_testing_tool = self._get_bool_env("ENABLE_TESTING_TOOL", False)
+        # Whether real pipeline runs additively cache their intermediate
+        # artifacts (transcript/analysis/metadata/policy) to disk for later
+        # "from prior run" testing. Failing to cache never breaks a real run
+        # (every call site wraps this in try/except) — see testing/cache.py.
+        self.test_artifact_cache_enabled = self._get_bool_env(
+            "TEST_ARTIFACT_CACHE_ENABLED", True
+        )
+        # Sibling of temp_dir, not inside it: temp_dir holds unnamespaced
+        # scratch files (e.g. ffmpeg mixing scratch) with no sweep-safety
+        # guarantee, so cached test artifacts live in their own directory.
+        self.test_artifact_cache_dir = os.getenv(
+            "TEST_ARTIFACT_CACHE_DIR", "test-artifacts"
+        )
+        self.test_fixtures_dir = os.getenv("TEST_FIXTURES_DIR", "test-fixtures")
+
     @staticmethod
     def _normalize_ranking_framing(value: str) -> str:
         value = (value or "").strip().lower()

@@ -1,0 +1,14 @@
+{
+  "description": "Edge case: analysis finds nothing worth clipping — exercises the pipeline's fallback-segment path downstream.",
+  "input": {
+    "transcript": "[00:00 - 00:06] Speaker A: Just a quick test clip, nothing interesting here.",
+    "max_clips": 5,
+    "target_duration_seconds": 30
+  },
+  "output": {
+    "most_relevant_segments": [],
+    "summary": "A brief, low-content test clip with no standalone-worthy moments.",
+    "key_topics": [],
+    "broll_opportunities": null
+  }
+}

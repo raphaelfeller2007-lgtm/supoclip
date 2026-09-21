@@ -1,0 +1,10 @@
+{
+  "description": "No captions/hook/overlays — fast path (stream copy) render for testing the bare cut.",
+  "input": {
+    "media_path": "clipping/media/sample.mp4",
+    "start_time": 0,
+    "end_time": 6,
+    "add_subtitles": false,
+    "output_format": "original"
+  }
+}
