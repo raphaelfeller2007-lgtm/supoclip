@@ -208,6 +208,7 @@ TEMPLATE_DEFAULTS: Dict[str, Any] = {
     "hook_font_size_scale": 0.82,
     "hook_font_color": None,
     "hook_background_color": None,
+    "hook_box_outline_color": None,
     "hook_stroke_color": None,
     "hook_stroke_width": None,
     "hook_position": "top",

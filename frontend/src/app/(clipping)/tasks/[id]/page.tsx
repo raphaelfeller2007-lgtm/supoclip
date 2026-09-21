@@ -1888,7 +1888,29 @@ export default function TaskPage() {
                       </div>
                       <div className="space-y-1.5">
                         <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
-                          Background box
+                          Text outline
+                          <Switch
+                            checked={(projectHookStyle.hook_stroke_width ?? 3) > 0}
+                            onCheckedChange={(checked) =>
+                              updateProjectHookStyle("hook_stroke_width", checked ? 3 : 0)
+                            }
+                          />
+                        </label>
+                        {(projectHookStyle.hook_stroke_width ?? 3) > 0 && (
+                          <input
+                            type="color"
+                            value={projectHookStyle.hook_stroke_color ?? "#000000"}
+                            onChange={(e) => updateProjectHookStyle("hook_stroke_color", e.target.value)}
+                            className="w-full h-8 rounded border border-border cursor-pointer"
+                          />
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
+                          Background color
                           <Switch
                             checked={projectHookStyle.hook_background_color !== null}
                             onCheckedChange={(checked) =>
@@ -1904,6 +1926,28 @@ export default function TaskPage() {
                             type="color"
                             value={projectHookStyle.hook_background_color.slice(0, 7)}
                             onChange={(e) => updateProjectHookStyle("hook_background_color", `${e.target.value}99`)}
+                            className="w-full h-8 rounded border border-border cursor-pointer"
+                          />
+                        )}
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
+                          Background outline
+                          <Switch
+                            checked={projectHookStyle.hook_box_outline_color !== null}
+                            onCheckedChange={(checked) =>
+                              updateProjectHookStyle(
+                                "hook_box_outline_color",
+                                checked ? (projectHookStyle.hook_box_outline_color ?? "#000000") : null,
+                              )
+                            }
+                          />
+                        </label>
+                        {projectHookStyle.hook_box_outline_color !== null && (
+                          <input
+                            type="color"
+                            value={projectHookStyle.hook_box_outline_color}
+                            onChange={(e) => updateProjectHookStyle("hook_box_outline_color", e.target.value)}
                             className="w-full h-8 rounded border border-border cursor-pointer"
                           />
                         )}

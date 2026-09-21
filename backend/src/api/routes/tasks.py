@@ -87,7 +87,13 @@ def _normalize_hook_style(value: Any) -> Optional[Dict[str, Any]]:
     if isinstance(font_size_scale, (int, float)):
         style["hook_font_size_scale"] = max(0.4, min(1.5, float(font_size_scale)))
 
-    for key in ("hook_font_color", "hook_background_color", "hook_stroke_color", "hook_highlight_color"):
+    for key in (
+        "hook_font_color",
+        "hook_background_color",
+        "hook_box_outline_color",
+        "hook_stroke_color",
+        "hook_highlight_color",
+    ):
         color = _normalize_hook_hex_color(value.get(key))
         if color:
             style[key] = color

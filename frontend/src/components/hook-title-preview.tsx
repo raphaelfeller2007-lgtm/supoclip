@@ -38,7 +38,9 @@ export function HookTitlePreview({
   const fontFamily = style.hook_font_family ?? template?.font_family ?? "inherit";
   const fontColor = style.hook_font_color ?? template?.font_color ?? "#FFFFFF";
   const backgroundColor = style.hook_background_color ?? "transparent";
+  const hasTextOutline = (style.hook_stroke_width ?? 3) > 0;
   const outlineColor = style.hook_stroke_color ?? "#000000";
+  const boxOutlineColor = style.hook_box_outline_color;
   const scale = style.hook_font_size_scale ?? 0.82;
   const position = style.hook_position ?? "top";
   const animation = style.hook_animation ?? "fade_pop";
@@ -106,7 +108,8 @@ export function HookTitlePreview({
             backgroundColor,
             fontSize: `${Math.round(scale * 22)}px`,
             padding: backgroundColor === "transparent" ? 0 : "0.3em 0.3em",
-            WebkitTextStroke: `1px ${outlineColor}`,
+            border: boxOutlineColor ? `2px solid ${boxOutlineColor}` : "none",
+            WebkitTextStroke: hasTextOutline ? `1px ${outlineColor}` : "0px transparent",
             textShadow: shadow ? "0 2px 4px rgba(0,0,0,0.6)" : "none",
             ...animationStyle,
           }}
