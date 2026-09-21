@@ -1,0 +1,13 @@
+{
+  "description": "Three bundled synthetic clips ranked through the default rapid_fire template.",
+  "input": {
+    "template_id": "rapid_fire",
+    "target_width": 480,
+    "target_height": 854,
+    "inputs": [
+      {"media_path": "ranking/media/clip_a.mp4", "framing": "blur_fill", "rank_text": "First place", "display_rank": 1},
+      {"media_path": "ranking/media/clip_b.mp4", "framing": "blur_fill", "rank_text": "Second place", "display_rank": 2},
+      {"media_path": "ranking/media/clip_c.mp4", "framing": "blur_fill", "rank_text": "Third place", "display_rank": 3}
+    ]
+  }
+}

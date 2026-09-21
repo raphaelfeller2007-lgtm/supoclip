@@ -1,0 +1,49 @@
+{
+  "description": "Two clip candidates selected from the default transcribe fixture's transcript.",
+  "input": {
+    "transcript": "[00:00 - 00:08] Speaker A: So the biggest mistake people make when starting a business is waiting for the perfect idea.\n[00:08 - 00:22] Speaker A: I wasted two years looking for the perfect idea before I realized the boring, obvious idea I'd been ignoring was the one that actually worked.\n[00:22 - 00:30] Speaker A: Once I shipped something imperfect, I learned more in a week than in those two years combined.\n[00:30 - 00:40] Speaker B: That's such a common trap though, how do you know when an idea is good enough to just start?\n[00:40 - 00:58] Speaker A: Honestly, if you can describe the problem in one sentence and you personally have felt that problem, that's good enough. Stop researching and go build a rough version this week.\n[00:58 - 01:10] Speaker A: The market will tell you the rest, and it tells you faster than any amount of planning ever will.",
+    "max_clips": 5,
+    "target_duration_seconds": 30
+  },
+  "output": {
+    "most_relevant_segments": [
+      {
+        "start_time": "00:00",
+        "end_time": "00:30",
+        "text": "So the biggest mistake people make when starting a business is waiting for the perfect idea. I wasted two years looking for the perfect idea before I realized the boring, obvious idea I'd been ignoring was the one that actually worked. Once I shipped something imperfect, I learned more in a week than in those two years combined.",
+        "relevance_score": 0.91,
+        "reasoning": "Strong contrarian hook (waiting for the perfect idea is a mistake) followed by a concrete personal example and a clear payoff.",
+        "virality": {
+          "hook_score": 22,
+          "engagement_score": 19,
+          "value_score": 20,
+          "shareability_score": 18,
+          "total_score": 79,
+          "hook_type": "contrast",
+          "virality_reasoning": "Opens with a bold contrarian claim, backed by a specific two-year anecdote."
+        },
+        "hook_title": "The #1 Mistake Killing Your Business Idea"
+      },
+      {
+        "start_time": "00:40",
+        "end_time": "01:10",
+        "text": "Honestly, if you can describe the problem in one sentence and you personally have felt that problem, that's good enough. Stop researching and go build a rough version this week. The market will tell you the rest, and it tells you faster than any amount of planning ever will.",
+        "relevance_score": 0.83,
+        "reasoning": "Actionable, quotable advice with a clear complete thought and payoff line.",
+        "virality": {
+          "hook_score": 17,
+          "engagement_score": 16,
+          "value_score": 22,
+          "shareability_score": 19,
+          "total_score": 74,
+          "hook_type": "statement",
+          "virality_reasoning": "Direct, actionable advice that's easy to quote and share."
+        },
+        "hook_title": "Why You Should Stop Researching And Just Build"
+      }
+    ],
+    "summary": "A founder explains why waiting for the perfect idea is a mistake and how shipping something imperfect teaches you faster than planning does.",
+    "key_topics": ["entrepreneurship", "shipping fast", "market validation"],
+    "broll_opportunities": null
+  }
+}

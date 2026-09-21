@@ -105,6 +105,18 @@ Fonts and transitions are configured by mounted files rather than environment va
 - Add `.ttf` or `.otf` files to `backend/fonts/`
 - Add transition `.mp4` files to `backend/transitions/`
 
+## Testing Tab Settings
+
+Dev-only isolated pipeline-stage runner — see CLAUDE.md's "Testing Tab" section. Off by default so it never appears on a hosted deployment.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ENABLE_TESTING_TOOL` | `false` | Backend: 404s every `/testing/*` route unless `true`. Set on both `backend` and `worker` |
+| `NEXT_PUBLIC_ENABLE_TESTING_TOOL` | `false` | Frontend: shows/hides the Testing tab in the tab bar. Should match `ENABLE_TESTING_TOOL` |
+| `TEST_ARTIFACT_CACHE_ENABLED` | `true` | Whether real pipeline runs additively cache intermediate artifacts for "from prior run" testing |
+| `TEST_FIXTURES_DIR` | `test-fixtures` | Where canned stage fixtures live — `/app/test-fixtures` in Docker (mounted from `./test-fixtures`) |
+| `TEST_ARTIFACT_CACHE_DIR` | `test-artifacts` | Where real-run artifact cache is written — `/app/test-artifacts` in Docker (mounted from `./test-artifacts`) |
+
 ## Redis and Database Settings
 
 | Variable | Default | Purpose |

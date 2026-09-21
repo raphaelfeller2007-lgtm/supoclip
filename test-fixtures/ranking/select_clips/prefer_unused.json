@@ -1,0 +1,16 @@
+{
+  "description": "8 candidate clips with mixed use_counts — selection should prefer the four 0-use clips, then fill the 5th from the least-used group.",
+  "input": {
+    "count": 5,
+    "clips": [
+      {"id": "c1", "use_count": 0},
+      {"id": "c2", "use_count": 0},
+      {"id": "c3", "use_count": 0},
+      {"id": "c4", "use_count": 0},
+      {"id": "c5", "use_count": 1},
+      {"id": "c6", "use_count": 1},
+      {"id": "c7", "use_count": 2},
+      {"id": "c8", "use_count": 3}
+    ]
+  }
+}

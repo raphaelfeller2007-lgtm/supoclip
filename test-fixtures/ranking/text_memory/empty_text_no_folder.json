@@ -1,0 +1,7 @@
+{
+  "description": "Empty text and no folder link — input_rank_text should become null, no mirroring.",
+  "input": {
+    "rank_text": "   ",
+    "folder_clip_id": null
+  }
+}

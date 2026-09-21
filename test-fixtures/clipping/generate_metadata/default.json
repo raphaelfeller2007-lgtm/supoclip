@@ -1,0 +1,22 @@
+{
+  "description": "Metadata for the two clips from detect_clips/default.json.",
+  "input": {
+    "clips": [
+      {"clip_id": "clip-1", "text": "So the biggest mistake people make when starting a business is waiting for the perfect idea...", "hook_title": "The #1 Mistake Killing Your Business Idea"},
+      {"clip_id": "clip-2", "text": "Honestly, if you can describe the problem in one sentence...", "hook_title": "Why You Should Stop Researching And Just Build"}
+    ],
+    "video_title": "Why Waiting For The Perfect Idea Is Killing Your Business"
+  },
+  "output": {
+    "clip-1": {
+      "title": "The #1 Mistake Killing Your Business Idea",
+      "description": "Why waiting for the perfect idea costs founders years of progress",
+      "tags": ["educational", "entrepreneurship", "startup-advice", "mistakes", "business"]
+    },
+    "clip-2": {
+      "title": "Stop Researching, Start Building Today",
+      "description": "The one-sentence test for knowing your idea is good enough",
+      "tags": ["educational", "productivity", "startup-advice", "action", "business"]
+    }
+  }
+}

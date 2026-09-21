@@ -182,6 +182,7 @@ def create_app(
     from .api.routes.metadata import router as metadata_router
     from .api.routes.batch_queue import router as batch_queue_router
     from .api.routes.ranking import router as ranking_router
+    from .api.routes.testing import router as testing_router
 
     app.include_router(media_router)
     app.include_router(feedback_router)
@@ -192,6 +193,7 @@ def create_app(
     app.include_router(metadata_router)
     app.include_router(batch_queue_router)
     app.include_router(ranking_router)
+    app.include_router(testing_router)
 
     @app.get("/")
     def read_root():

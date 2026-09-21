@@ -1,0 +1,9 @@
+{
+  "description": "sensitivity 0 = cleanup off, keep_ranges should equal the full requested span unchanged.",
+  "input": {
+    "media_path": "clipping/media/sample.mp4",
+    "clip_start": 0,
+    "clip_end": 6,
+    "sensitivity": 0
+  }
+}

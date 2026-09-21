@@ -105,3 +105,15 @@ Date: 2026-09-14
 Choice: A ranking input that isn't already 9:16 defaults to `blur_fill` (scaled-to-fit over a blurred, scaled-to-fill copy of itself) rather than `crop_fill` (center-crop), configurable per clip and tool-wide via Settings (`RANKING_DEFAULT_FRAMING`).
 Why: Ranking source footage is frequently chaotic/unfocused by nature (fails, chaotic action, funny accidents) — a center-crop has a real chance of cutting the actual subject out of frame, while blur-fill always preserves the whole original frame.
 Reversible? Yes — it's a per-clip enum with a tool-wide default setting, not a hardcoded pipeline step; either could be changed without a data migration.
+
+## Testing tab is stub-first; real calls are opt-in
+Date: 2026-09-21
+Choice: The Testing tab's default mode for every LLM/API-calling stage is "stub" (canned fixture data, zero network calls, zero cost); "real" mode is an explicit per-run toggle that shows a cost estimate before running. Stub-vs-real is decided by a wrapper in `backend/src/testing/stages.py` *before* ever calling into `ai.py`/`video_utils.py`/`content_policy.py`, not by mocking those modules — so the real pipeline code is untouched and can't regress.
+Why: The whole point of the tab is to speed up development and cut API/LLM cost during iteration; a default that silently spends money on every test run would defeat that, and a developer who forgot to flip a flag back would rack up real charges without noticing.
+Reversible? Yes — the stub/real split is one `mode` parameter; flipping the default would be a one-line change, though it would undermine the tab's whole cost-avoidance premise.
+
+## Testing tab never writes to production task/clip data
+Date: 2026-09-21
+Choice: Stage runs in the Testing tab take plain dict/JSON input and return plain dict/JSON output — no `TaskRepository`/`ClipRepository`/`RankingRepository` writes, ever. Real-run artifact caching (for "from prior run" testing) is a side JSON file per task (`test-artifacts/<task_id>/<stage_id>.json`), not a new DB table or column, and is read-only from the Testing tab's perspective.
+Why: `task_type` is a soft, unenforced column (read via `getattr(..., "clipping")` fallback everywhere) — reusing the `tasks` table for test runs would have meant auditing every listing/billing/status-count query to exclude a new type, exactly the kind of blast radius a dev-only tool shouldn't introduce into the production pipeline.
+Reversible? Partially — an explicit "Save to project" action (writing a stage's output back onto a real task/clip) was deliberately left out of the first pass and would need its own confirmation UI if added later.

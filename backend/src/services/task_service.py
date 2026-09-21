@@ -46,6 +46,7 @@ from ..clip_source_map import (
     total_source_duration,
     trim_source_ranges,
 )
+from ..testing.cache import cache_test_artifact
 
 logger = logging.getLogger(__name__)
 PROCESSING_CACHE_VERSION = "20260319_grounded_segments_v1"
@@ -62,6 +63,13 @@ class TaskService:
         self.cache_repo = CacheRepository()
         self.video_service = VideoService()
         self.config = config or get_config()
+
+    def _cache_test_artifact_if_enabled(
+        self, task_id: str, stage_id: str, input_data: Dict[str, Any], output_data: Dict[str, Any]
+    ) -> None:
+        if not self.config.test_artifact_cache_enabled:
+            return
+        cache_test_artifact(task_id, "clipping", stage_id, input_data=input_data, output_data=output_data)
 
     @staticmethod
     def _build_cache_key(url: str, source_type: str, processing_mode: str) -> str:
@@ -448,8 +456,14 @@ class TaskService:
             try:
                 clips_for_scan = await self.clip_repo.get_clips_by_task(self.db, task_id)
                 if user_id and clips_for_scan:
-                    await ContentPolicyService(self.db).scan_video(
+                    scan_results = await ContentPolicyService(self.db).scan_video(
                         user_id, task_id, clips_for_scan
+                    )
+                    self._cache_test_artifact_if_enabled(
+                        task_id,
+                        "policy_check",
+                        {"clip_ids": list(scan_results.keys())},
+                        {"flags_by_clip_id": scan_results},
                     )
             except Exception as exc:
                 logger.warning(
@@ -473,11 +487,17 @@ class TaskService:
                         (task_record or {}).get("source_title")
                         or (task_record or {}).get("source_url")
                     )
-                    await MetadataService(self.db).regenerate_project_metadata(
+                    metadata_result = await MetadataService(self.db).regenerate_project_metadata(
                         task_id,
                         clips_for_metadata,
                         video_title=video_title,
                         allow_gemini=self.config.llm_provider_mode in ("gemini", "hybrid"),
+                    )
+                    self._cache_test_artifact_if_enabled(
+                        task_id,
+                        "generate_metadata",
+                        {"video_title": video_title, "clip_ids": [c["id"] for c in clips_for_metadata]},
+                        metadata_result,
                     )
             except Exception as exc:
                 logger.warning(

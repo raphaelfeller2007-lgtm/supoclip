@@ -1,0 +1,13 @@
+{
+  "description": "Exactly 5 candidates for 5 slots — selection should return all of them regardless of shuffle.",
+  "input": {
+    "count": 5,
+    "clips": [
+      {"id": "c1", "use_count": 0},
+      {"id": "c2", "use_count": 0},
+      {"id": "c3", "use_count": 0},
+      {"id": "c4", "use_count": 0},
+      {"id": "c5", "use_count": 0}
+    ]
+  }
+}

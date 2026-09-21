@@ -1,0 +1,11 @@
+{
+  "description": "Ordinary clean text — should produce zero flags regardless of sensitivity.",
+  "input": {
+    "text": "Today we're talking about how to build a better morning routine.",
+    "sensitivity": "high",
+    "use_llm_borderline": true
+  },
+  "output": {
+    "borderline_phrases": []
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Text with an indirect drug reference the regex word-list wouldn't catch — exercises the LLM borderline pass.",
+  "input": {
+    "text": "We were so blazed at that party, honestly don't remember half of it.",
+    "sensitivity": "high",
+    "use_llm_borderline": true
+  },
+  "output": {
+    "borderline_phrases": ["blazed"]
+  }
+}

@@ -36,7 +36,10 @@ backend/src/*.py            Domain modules — ai.py, video_utils.py, clip_edito
 backend/fonts/              .ttf files, auto-served via GET /fonts
 backend/transitions/        .mp4 files, auto-served via GET /transitions
 backend/templates/          Folder-based templates for non-clipping tools (e.g. templates/ranking/<name>/config.json)
+backend/src/testing/        Testing-tab stage registry (see "Testing Tab" below) — dev tool, off by default
 backend/tests/              pytest suite
+test-fixtures/              Canned stage inputs/outputs for the Testing tab, git-committed
+test-artifacts/             Real-run artifact cache for the Testing tab, git-ignored (not fixtures — see below)
 frontend/src/app/           Next.js routes; (clipping)/ is a route group for /create /list /tasks/[id] /trash
 frontend/src/components/    React components; editor/, home/, ui/ (ShadCN primitives) subfolders
 frontend/src/lib/           Client-side helpers — one file per concern, no barrel exports
@@ -72,6 +75,8 @@ docker-compose.yml          Frontend/backend/worker/postgres/redis service defin
 | `frontend/src/app/settings/page.tsx` | User-facing settings (runtime settings form + local-only prefs) |
 | `frontend/src/tools/registry.ts` | The list of tools shown in the tab bar |
 | `init.sql` | Postgres schema — check here before assuming a column exists |
+| `backend/src/testing/stages.py` | Testing-tab stage registry — every isolated pipeline stage, one wrapper function each |
+| `frontend/src/components/testing/stage-runner-panel.tsx` | Testing-tab UI: input source, stub/real mode, run, output |
 
 ## How to Run Locally
 
@@ -108,6 +113,51 @@ Single backend test: `cd backend && .venv/bin/pytest tests/unit/test_x.py -k nam
 - Cut logic (pause/filler removal) → `backend/src/clip_cleanup.py` (settings/thresholds) + `video_utils.py::build_clip_keep_ranges` (applies cuts)
 - Caption rendering → `video_utils.py::build_assemblyai_ass_subtitles` (captions), `build_hook_title_ass` (hooks)
 - Hook generation prompt → `backend/src/ai.py::HOOK_GENERATION_RULES`
+
+## Testing Tab
+
+A dev-only tab (hidden unless `ENABLE_TESTING_TOOL=true`) that runs any single
+pipeline stage in isolation — no need to run the full pipeline, no AssemblyAI/
+LLM cost unless you explicitly opt into real mode. See
+`backend/src/testing/stages.py` for the full stage list (13 stages across
+Clipping and Ranking); each wraps an **existing** pipeline function, it never
+reimplements pipeline logic.
+
+- **Fixtures** (canned sample inputs/outputs) → `test-fixtures/<tool>/<stage_id>/<name>.json`,
+  git-committed. A fixture is `{"description", "input", "output"?}` — `output`
+  is only present for stages that stub an LLM/API call; pure-local stages
+  (render, cut_silence, folder_scan, …) only need `input` since their real
+  call is free. Small synthetic sample videos (no copyrighted content, ffmpeg
+  `testsrc`/`sine` generated) live under `test-fixtures/<tool>/media/`.
+- **Stub mode** (default): the stage wrapper in `stages.py` checks
+  `mode == "stub"` and loads a fixture's `output` **before** ever calling into
+  `ai.py`/`video_utils.py`/`content_policy.py` — the real function is never
+  invoked, so stub mode makes zero network calls, guaranteed (see
+  `backend/tests/unit/test_testing_stage_registry.py` for the tests that
+  enforce this per stage). Purely local stages (no `external_service`) have
+  no stub concept — they always run for real since that costs nothing.
+- **Real-run artifact cache** (for "from prior run" testing) →
+  `test-artifacts/<task_id>/<stage_id>.json`, written additively (wrapped in
+  try/except, never breaks a real run) by `TaskService`/`VideoService`/
+  `RankingService` via `testing/cache.py::cache_test_artifact`. Gated by
+  `TEST_ARTIFACT_CACHE_ENABLED` (default true). This is a side JSON mirror,
+  not a new DB table or column — Testing-tab runs never write to `tasks`/
+  `generated_clips`/`ranking_inputs` themselves.
+- **Cost estimates** are always labeled as estimates (`backend/src/testing/costs.py`'s
+  static per-provider price table) — none of these APIs return exact billed
+  cost, so this is a pre-run warning, not a billing reconciliation tool.
+- **Docker**: `test-fixtures/` and `test-artifacts/` are mounted into the
+  `backend`/`worker` containers (see `docker-compose.yml`) at
+  `/app/test-fixtures` / `/app/test-artifacts`, with `TEST_FIXTURES_DIR`/
+  `TEST_ARTIFACT_CACHE_DIR` set to match — they are **not** resolved relative
+  to `TEMP_DIR` (which holds unnamespaced scratch files with no
+  sweep-safety guarantee).
+- **Add a new stage:** write an `async def run(input_data, *, mode, config)`
+  in `backend/src/testing/stages.py` wrapping the real function, add a
+  `StageSpec` entry via `_register(...)`. If it's an LLM/API stage, branch on
+  `mode == "stub"` before calling the real function and add 1-2 fixtures.
+- **Add a fixture:** drop a JSON file under `test-fixtures/<tool>/<stage_id>/`,
+  or use the tab's "Save as fixture" button on a completed run.
 
 ## Common Pitfalls
 
@@ -163,10 +213,11 @@ One line each — full rationale in [docs/development.md](docs/development.md#fe
 - **New setting:** add the field to `Config` in `backend/src/config.py`, add its metadata to `SETTING_METADATA` in `backend/src/api/routes/admin.py`, always expose `current_value` (never hide a non-secret behind "configured"/"unset").
 - **New export preset:** append (don't reorder) to `EXPORT_PRESETS` in `backend/src/clip_editor.py`, including `max_duration_seconds`/`safe_area_*_pct`/`target_lufs`.
 - **Update safe zones:** edit `PLATFORM_SAFE_ZONES` in `frontend/src/lib/safe-zones.ts` — nothing else needs to change.
+- **New Testing-tab stage:** see "Testing Tab" above.
 
 ## Environment Variables
 
-Full list: [docs/configuration.md](docs/configuration.md). Core: `ASSEMBLY_AI_API_KEY`, `LLM` (`provider:model`), `GOOGLE_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, `OLLAMA_BASE_URL`, `REQUIRE_AUTH`, `PEXELS_API_KEY`, `REDIS_HOST`/`PORT`, `DATABASE_URL`, `TEMP_DIR`.
+Full list: [docs/configuration.md](docs/configuration.md). Core: `ASSEMBLY_AI_API_KEY`, `LLM` (`provider:model`), `GOOGLE_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, `OLLAMA_BASE_URL`, `REQUIRE_AUTH`, `PEXELS_API_KEY`, `REDIS_HOST`/`PORT`, `DATABASE_URL`, `TEMP_DIR`. Testing tab: `ENABLE_TESTING_TOOL` (+ `NEXT_PUBLIC_ENABLE_TESTING_TOOL` on the frontend), `TEST_ARTIFACT_CACHE_ENABLED`, `TEST_FIXTURES_DIR`, `TEST_ARTIFACT_CACHE_DIR`.
 
 ## Other Subsystems
 
