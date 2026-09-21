@@ -3,16 +3,23 @@ FROM python:3.11-slim
 
 # Install system dependencies including ffmpeg and unzip (for deno).
 # Note: fonts-noto-color-emoji does NOT make burned-in captions/hooks
-# render colour emoji — this ffmpeg/libass build cannot composite full-colour
-# glyphs (COLR or bitmap/CBDT) via the subtitles filter regardless of which
-# colour-emoji font is installed (verified directly; see backend/src/
-# emoji_reactions.py's module docstring). Burned-in emoji reactions are
-# rendered as true-colour image overlays instead (backend/assets/emoji/).
+# render colour emoji via ASS/libass — this ffmpeg/libass build cannot
+# composite full-colour glyphs (COLR or bitmap/CBDT) via the subtitles
+# filter regardless of which colour-emoji font is installed (verified
+# directly; see backend/src/emoji_reactions.py's module docstring).
+# It IS still required here: video_utils.py's render_emoji_cluster_png
+# renders hook-title/ranking-list emoji straight through Pillow
+# (embedded_color draw mode), a separate path from the subtitles filter,
+# and composites the result as a true-colour image overlay. Without this
+# package, fontconfig falls back to a generic non-colour font for that
+# lookup, which drew monochrome tofu glyphs (or nothing) instead of
+# skipping the overlay - see _emoji_font_path()'s family-name check.
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
     unzip \
     fontconfig \
+    fonts-noto-color-emoji \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 

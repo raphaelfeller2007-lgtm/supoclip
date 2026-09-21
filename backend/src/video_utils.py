@@ -1936,6 +1936,17 @@ def split_text_and_emoji(text: str) -> Tuple[str, str]:
 _EMOJI_FONT_PATH_CACHE: Optional[str] = None
 
 
+# fc-match ALWAYS returns some substitute font even when "Noto Color Emoji"
+# isn't installed (that's the point of fontconfig fallback matching) - it
+# does not fail or return empty. Trusting the file path alone made Pillow
+# render emoji glyphs through whatever generic sans-serif fontconfig picked
+# instead: either a monochrome outline glyph (looks black/white) at
+# codepoints the substitute happens to define, or nothing (bbox empty, so
+# the overlay is silently skipped) at codepoints it doesn't. The family
+# name must actually be a known colour-emoji font before we trust it.
+_COLOR_EMOJI_FAMILIES = {"noto color emoji", "apple color emoji", "segoe ui emoji", "twemoji mozilla"}
+
+
 def _emoji_font_path() -> Optional[str]:
     """Locate a colour-emoji font file via fontconfig for direct Pillow
     rendering. Cached (one-shot, like emoji_rendering_supported()); returns
@@ -1947,11 +1958,13 @@ def _emoji_font_path() -> Optional[str]:
     path = ""
     try:
         result = subprocess.run(
-            ["fc-match", "-f", "%{file}", "Noto Color Emoji"],
+            ["fc-match", "-f", "%{file}\\n%{family}", "Noto Color Emoji"],
             capture_output=True, text=True, timeout=5,
         )
-        candidate = result.stdout.strip()
-        if candidate and Path(candidate).is_file():
+        candidate, _, family = result.stdout.partition("\n")
+        candidate = candidate.strip()
+        family = family.strip().lower()
+        if candidate and Path(candidate).is_file() and family in _COLOR_EMOJI_FAMILIES:
             path = candidate
     except Exception:
         path = ""
