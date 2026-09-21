@@ -1916,7 +1916,7 @@ export default function TaskPage() {
                             onCheckedChange={(checked) =>
                               updateProjectHookStyle(
                                 "hook_background_color",
-                                checked ? (projectHookStyle.hook_background_color ?? "#00000099") : null,
+                                checked ? (projectHookStyle.hook_background_color ?? "#000000") : null,
                               )
                             }
                           />
@@ -1925,7 +1925,7 @@ export default function TaskPage() {
                           <input
                             type="color"
                             value={projectHookStyle.hook_background_color.slice(0, 7)}
-                            onChange={(e) => updateProjectHookStyle("hook_background_color", `${e.target.value}99`)}
+                            onChange={(e) => updateProjectHookStyle("hook_background_color", e.target.value)}
                             className="w-full h-8 rounded border border-border cursor-pointer"
                           />
                         )}

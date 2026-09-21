@@ -2019,6 +2019,30 @@ def measure_text_width(text: str, font_family: Optional[str], font_name: str, px
     return len(text) * px * 0.55  # rough fallback if fontconfig/Pillow fails
 
 
+def measure_line_height(font_family: Optional[str], font_name: str, px: int) -> float:
+    """Real `\\N`-line spacing for `font_name`/`font_family` at `px`, so
+    multi-line hook titles can stack a trailing emoji against the actual
+    second line instead of a guessed multiplier. Same font-resolution path as
+    measure_text_width; falls back to the old 1.2x-of-px guess if the font
+    file can't be loaded."""
+    font_path = None
+    if font_family:
+        custom = find_font_path(font_family, allow_all_user_fonts=True)
+        if custom:
+            font_path = str(custom)
+    if not font_path:
+        font_path = _fc_match_font_path(font_name)
+    if font_path:
+        try:
+            from PIL import ImageFont
+
+            ascent, descent = ImageFont.truetype(font_path, px).getmetrics()
+            return ascent + descent
+        except Exception:
+            pass
+    return px * 1.2  # rough fallback if fontconfig/Pillow fails
+
+
 # Bundled colour-emoji fonts (Noto Color Emoji, Apple Color Emoji, etc.) are
 # CBDT/sbix bitmap fonts with only a handful of fixed embedded strike sizes —
 # requesting any other size raises "invalid pixel size" rather than scaling.
@@ -2234,7 +2258,10 @@ def build_hook_title_ass(
     text_outline_color = hex_to_ass_color(stroke_color, "#000000")
     background_color = effective.get("hook_background_color")
     has_box_fill = background_color is not None
-    fill_color = hex_to_ass_color(background_color, "#00000099")
+    # Always fully opaque — the UI no longer exposes an alpha control for this
+    # color, but legacy saved styles may still carry an alpha suffix from
+    # before that change, so force it off here rather than trusting storage.
+    fill_color = hex_to_ass_color(background_color, "#000000", include_alpha=False)
     box_outline_color_value = effective.get("hook_box_outline_color")
     has_box_outline = box_outline_color_value is not None
     box_outline_color = hex_to_ass_color(box_outline_color_value, "#000000")
@@ -2266,9 +2293,10 @@ def build_hook_title_ass(
         hook_stroke_width if hook_stroke_width is not None else template.get("stroke_width", 3) or 0
     )
     has_text_outline = base_stroke > 0
-    text_outline_px = (
-        max(base_stroke, round(hook_px * base_stroke / 26)) if has_text_outline else 0
-    )
+    # Thin, legibility-only stroke (~2% of glyph size) rather than a heavy
+    # border — the outline should help text read over video, not compete
+    # with it for visual weight.
+    text_outline_px = max(1, round(hook_px * 0.02)) if has_text_outline else 0
 
     # Backing-box padding — roomy pill, not a tight hug around the glyphs.
     fill_pad = max(10, round(hook_px * 0.3))
@@ -2278,7 +2306,10 @@ def build_hook_title_ass(
 
     hook_shadow = effective.get("hook_shadow")
     has_shadow = bool(hook_shadow) if hook_shadow is not None else bool(template.get("shadow"))
-    shadow_px = max(2, hook_px // 20) if has_shadow else 0
+    # Kept well under text_outline_px (~2% of hook_px) so BorderStyle=1's
+    # diagonal shadow pass reads as subtle depth behind the stroke rather than
+    # competing with/masquerading as the outline itself.
+    shadow_px = max(1, round(hook_px * 0.008)) if has_shadow else 0
 
     hook_position = effective.get("hook_position") or "top"
     margin_frac = max(48, int(video_height * HOOK_TITLE_TOP_MARGIN_FRAC))
@@ -2370,7 +2401,7 @@ def build_hook_title_ass(
         rendered = render_emoji_cluster_png(emoji_cluster, glyph_px)
         if rendered:
             emoji_path, emoji_w, emoji_h = rendered
-            line_height = round(hook_px * 1.2)
+            line_height = measure_line_height(hook_font_family, hook_font_name, hook_px)
             num_lines = max(1, len(lines))
             last_line_text = lines[-1] if lines else ""
             if alignment == 2:  # bottom-anchored (an2)
@@ -2393,6 +2424,8 @@ def build_hook_title_ass(
             gap = round(hook_px * 0.16)
             emoji_x = round(video_width / 2 + last_line_width / 2 + gap)
             emoji_y = round(cap_center_y - emoji_h / 2)
+            emoji_x = max(0, min(emoji_x, video_width - emoji_w))
+            emoji_y = max(0, min(emoji_y, video_height - emoji_h))
             image_overlays.append(
                 {
                     "path": emoji_path,

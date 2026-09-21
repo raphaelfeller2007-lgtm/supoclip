@@ -1115,7 +1115,7 @@ export default function VideoProcessingPage() {
                     <Switch
                       checked={hookStyle.hook_background_color !== null}
                       onCheckedChange={(checked) =>
-                        updateHookStyle("hook_background_color", checked ? (hookStyle.hook_background_color ?? "#00000099") : null)
+                        updateHookStyle("hook_background_color", checked ? (hookStyle.hook_background_color ?? "#000000") : null)
                       }
                       disabled={isLoading}
                     />
@@ -1125,7 +1125,7 @@ export default function VideoProcessingPage() {
                       <input
                         type="color"
                         value={hookStyle.hook_background_color.slice(0, 7)}
-                        onChange={(e) => updateHookStyle("hook_background_color", `${e.target.value}99`)}
+                        onChange={(e) => updateHookStyle("hook_background_color", e.target.value)}
                         disabled={isLoading}
                         className="w-10 h-8 border border-border cursor-pointer"
                       />
