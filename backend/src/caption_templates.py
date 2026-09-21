@@ -21,7 +21,7 @@ AnimationType = Literal["none", "karaoke", "pop", "fade", "bounce"]
 CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
     "default": {
         "name": "Default",
-        "description": "Punchy word-by-word captions with a pop highlight and emojis",
+        "description": "Punchy word-by-word captions with a pop highlight",
         "font_family": "THEBOLDFONT",
         "font_size": 32,
         "font_color": "#FFFFFF",
@@ -35,7 +35,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "word_box_color": None,
         "animation": "karaoke",
         "word_pop": True,
-        "emoji": True,
+        "emoji": False,
         "uppercase": False,
         "shadow": True,
         "glow": False,
@@ -58,7 +58,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "word_box_color": "#00BF49",  # Green pill behind active word
         "animation": "karaoke",
         "word_pop": True,
-        "emoji": True,
+        "emoji": False,
         "uppercase": True,
         "shadow": True,
         "glow": False,
@@ -67,7 +67,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
     "mrbeast": {
         "name": "MrBeast",
-        "description": "Large yellow text with red pop highlights and emojis",
+        "description": "Large yellow text with red pop highlights",
         "font_family": "THEBOLDFONT",
         "font_size": 42,
         "font_color": "#FFFF00",  # Yellow
@@ -81,7 +81,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "word_box_color": None,
         "animation": "karaoke",
         "word_pop": True,
-        "emoji": True,
+        "emoji": False,
         "uppercase": True,
         "shadow": True,
         "glow": False,
@@ -127,7 +127,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "word_box_color": None,
         "animation": "karaoke",
         "word_pop": True,
-        "emoji": True,
+        "emoji": False,
         "uppercase": False,
         "shadow": True,
         "glow": False,
@@ -196,7 +196,7 @@ TEMPLATE_DEFAULTS: Dict[str, Any] = {
     "word_box_color": None,
     "animation": "karaoke",
     "word_pop": True,
-    "emoji": True,
+    "emoji": False,
     "uppercase": False,
     "shadow": True,
     "glow": False,

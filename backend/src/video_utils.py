@@ -2055,12 +2055,12 @@ def measure_text_width(text: str, font_family: Optional[str], font_name: str, px
     return len(text) * px * 0.55  # rough fallback if fontconfig/Pillow fails
 
 
-def measure_line_height(font_family: Optional[str], font_name: str, px: int) -> float:
-    """Real `\\N`-line spacing for `font_name`/`font_family` at `px`, so
-    multi-line hook titles can stack a trailing emoji against the actual
-    second line instead of a guessed multiplier. Same font-resolution path as
-    measure_text_width; falls back to the old 1.2x-of-px guess if the font
-    file can't be loaded."""
+def measure_font_metrics(font_family: Optional[str], font_name: str, px: int) -> Tuple[float, float]:
+    """Real (ascent, descent) for `font_name`/`font_family` at `px` — lets a
+    trailing hook emoji sit on the same baseline as the surrounding text
+    (like an inline character) instead of guessing an offset. Same
+    font-resolution path as measure_text_width; falls back to typical
+    proportions if the font file can't be loaded."""
     font_path = None
     if font_family:
         custom = find_font_path(font_family, allow_all_user_fonts=True)
@@ -2073,10 +2073,18 @@ def measure_line_height(font_family: Optional[str], font_name: str, px: int) -> 
             from PIL import ImageFont
 
             ascent, descent = ImageFont.truetype(font_path, px).getmetrics()
-            return ascent + descent
+            return float(ascent), float(descent)
         except Exception:
             pass
-    return px * 1.2  # rough fallback if fontconfig/Pillow fails
+    return px * 0.8, px * 0.4  # rough fallback if fontconfig/Pillow fails
+
+
+def measure_line_height(font_family: Optional[str], font_name: str, px: int) -> float:
+    """Real `\\N`-line spacing for `font_name`/`font_family` at `px`, so
+    multi-line hook titles can stack a trailing emoji against the actual
+    second line instead of a guessed multiplier."""
+    ascent, descent = measure_font_metrics(font_family, font_name, px)
+    return ascent + descent
 
 
 # Bundled colour-emoji fonts (Noto Color Emoji, Apple Color Emoji, etc.) are
@@ -2446,22 +2454,19 @@ def build_hook_title_ass(
         if rendered:
             emoji_path, emoji_w, emoji_h = rendered
             last_line_text = lines[-1] if lines else ""
-            last_line_center_y = block_top + (num_lines - 1) * line_height + line_height / 2
-            # Text glyphs sit in the upper portion of the line box (baseline is
-            # well above the box's bottom, to leave descender room most hook
-            # words never use), so their visual cap-height center sits well
-            # above the line's geometric center — nudge up to match, or the
-            # emoji reads as sitting low relative to the letters next to it.
-            cap_center_y = last_line_center_y - hook_px * 0.22
+            last_line_top = block_top + (num_lines - 1) * line_height
+            ascent, _descent = measure_font_metrics(hook_font_family, hook_font_name, hook_px)
+            # Sit on the same baseline as the text around it, like an inline
+            # character rather than a separately-positioned overlay — no
+            # cap-height/center guesswork, just where a glyph would land.
+            baseline_y = last_line_top + ascent
             last_line_width = measure_text_width(
                 last_line_text, hook_font_family, hook_font_name, hook_px
             )
-            # A tight, natural gap — this used to sit nearly a full glyph-width
-            # away from the last word, which read as "floating" rather than
-            # attached to the text it follows.
-            gap = round(hook_px * 0.04)
+            # The same gap a real space character between words would leave.
+            gap = measure_text_width(" ", hook_font_family, hook_font_name, hook_px) or hook_px * 0.25
             emoji_x = round(video_width / 2 + last_line_width / 2 + gap)
-            emoji_y = round(cap_center_y - emoji_h / 2)
+            emoji_y = round(baseline_y - emoji_h)
             emoji_x = max(0, min(emoji_x, video_width - emoji_w))
             emoji_y = max(0, min(emoji_y, video_height - emoji_h))
             image_overlays.append(
@@ -2544,11 +2549,13 @@ def build_hook_title_ass(
         border_box_left = fill_box_left - border_extra
         border_box_top = fill_box_top - border_extra
 
-        # Pill-shaped ends by default (radius = half the box height) — reads
-        # as one smooth rounded shape rather than the old hard-cornered
-        # rectangle-on-rectangle stack.
-        fill_radius = fill_box_h / 2
-        border_radius = border_box_h / 2
+        # A modest, fixed corner rounding — a rounded rectangle that still
+        # reads as "boxy" around the text block, not a full stadium/pill.
+        # The border's radius grows with its own extra ring width so the
+        # two stay concentric (same curve, uniform ring thickness) instead
+        # of the outer ring flattening out relative to the inner fill.
+        fill_radius = max(6, round(hook_px * 0.16))
+        border_radius = fill_radius + border_extra
 
         if has_box_outline:
             border_bgr = hex_to_ass_bgr(box_outline_color_value, "#000000")
