@@ -41,7 +41,9 @@ export type HookStyle = {
   hook_font_size_scale: number | null;
   hook_font_color: string | null;
   hook_background_color: string | null;
+  hook_box_outline_color: string | null;
   hook_stroke_color: string | null;
+  hook_stroke_width: number | null;
   hook_position: HookPosition | null;
   hook_duration_seconds: number | null;
   hook_animation: HookAnimation | null;
@@ -57,7 +59,9 @@ export const DEFAULT_HOOK_STYLE: HookStyle = {
   hook_font_size_scale: null,
   hook_font_color: null,
   hook_background_color: null,
+  hook_box_outline_color: null,
   hook_stroke_color: null,
+  hook_stroke_width: null,
   hook_position: null,
   hook_duration_seconds: null,
   hook_animation: null,

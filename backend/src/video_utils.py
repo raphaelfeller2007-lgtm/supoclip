@@ -2221,12 +2221,28 @@ def build_hook_title_ass(
     # hook's keyword pop stays consistent (and independently customizable)
     # regardless of which caption style is selected.
     highlight = hex_to_ass_color(effective.get("hook_highlight_color"), "#FFE000")
+    # Text outline, box background fill, and box outline/border are three
+    # independently toggleable elements (each None/absent = off). They used to
+    # share a single ASS Outline/OutlineColour slot (this libass build paints
+    # BorderStyle=3's box using OutlineColour, not BackColour — see CLAUDE.md's
+    # pitfall list), which meant turning on a background silently replaced the
+    # text's own outline and the background swatch the user picked never
+    # actually painted the box. Now each gets its own Dialogue layer/Style so
+    # they render independently and every color picker actually does what it
+    # shows.
     stroke_color = effective.get("hook_stroke_color") or template.get("stroke_color")
-    outline = hex_to_ass_color(stroke_color, "#000000")
-    # Hook background is opt-in only — never inherit the caption template's own
-    # background_color (that's meant for the spoken-word captions, not the hook).
+    text_outline_color = hex_to_ass_color(stroke_color, "#000000")
     background_color = effective.get("hook_background_color")
-    back_color = hex_to_ass_color(background_color, "#00000099")
+    has_box_fill = background_color is not None
+    fill_color = hex_to_ass_color(background_color, "#00000099")
+    box_outline_color_value = effective.get("hook_box_outline_color")
+    has_box_outline = box_outline_color_value is not None
+    box_outline_color = hex_to_ass_color(box_outline_color_value, "#000000")
+    has_box = has_box_fill or has_box_outline
+    # Fully transparent primary fill for box-only layers — the box's own text
+    # glyph must stay invisible (only its BorderStyle=3 padding/box shows),
+    # since the real glyph is drawn separately by the text layer on top.
+    invisible_primary = hex_to_ass_color("#FFFFFF00")
 
     font_size_scale = float(effective.get("hook_font_size_scale") or 0.82)
     # Hook titles are allowed to run noticeably larger than captions since
@@ -2242,22 +2258,23 @@ def build_hook_title_ass(
     if longest > max_chars:
         hook_px = max(36, min(base_px, int(usable_width / (longest * 0.52))))
 
+    # Text outline is now purely a per-glyph stroke (BorderStyle=1), fully
+    # independent of the background box — 0 means the user explicitly turned
+    # it off, unset inherits the caption template's own stroke width.
     hook_stroke_width = effective.get("hook_stroke_width")
     base_stroke = int(
         hook_stroke_width if hook_stroke_width is not None else template.get("stroke_width", 3) or 0
     )
-    has_outline = base_stroke > 0
-    # Box mode depends only on an explicit hook background — independent of
-    # whether an outline is drawn, so turning off the outline never conjures
-    # up an unrequested background box.
-    border_style = 3 if background_color else 1
-    outline_px = (
-        max(base_stroke, round(hook_px * base_stroke / 26)) if has_outline else 0
+    has_text_outline = base_stroke > 0
+    text_outline_px = (
+        max(base_stroke, round(hook_px * base_stroke / 26)) if has_text_outline else 0
     )
-    if border_style == 3:
-        outline_px = max(10, round(hook_px * 0.3))  # backing-box padding — roomy pill, not a tight hug
-    elif outline_px == 0:
-        outline_px = max(2, hook_px // 16)  # always keep contrast on video
+
+    # Backing-box padding — roomy pill, not a tight hug around the glyphs.
+    fill_pad = max(10, round(hook_px * 0.3))
+    # The border box is drawn behind (and larger than) the fill box, so the
+    # extra padding it adds beyond fill_pad is what reads as a visible ring.
+    border_pad = fill_pad + max(6, round(hook_px * 0.15))
 
     hook_shadow = effective.get("hook_shadow")
     has_shadow = bool(hook_shadow) if hook_shadow is not None else bool(template.get("shadow"))
@@ -2275,10 +2292,42 @@ def build_hook_title_ass(
         alignment = 8
         margin_v = margin_frac
 
-    style_line = (
-        f"Style: Hook,{hook_font_name},{hook_px},{primary},&H000000FF,{outline},{back_color},"
-        f"1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},{alignment},60,60,{margin_v},1"
+    # When the box (fill and/or outline) is present, the hook renders as more
+    # than one overlapping Dialogue event (box layer(s) behind, text on top).
+    # libass's automatic collision avoidance shifts same-layer overlapping
+    # lines apart instead of compositing them (verified directly — two
+    # same-position BorderStyle=3 events at automatic layout stack vertically
+    # rather than nesting), so every layer needs an explicit shared anchor via
+    # \pos/\an that reproduces what the automatic alignment+MarginV layout
+    # would have placed, bypassing that collision logic entirely.
+    pos_x = video_width // 2
+    if alignment == 2:
+        pos_y = video_height - margin_v
+    elif alignment == 5:
+        pos_y = video_height // 2
+    else:
+        pos_y = margin_v
+    pos_tag = f"\\an{alignment}\\pos({pos_x},{pos_y})" if has_box else ""
+
+    text_style_line = (
+        f"Style: Hook,{hook_font_name},{hook_px},{primary},&H000000FF,{text_outline_color},&H00000000,"
+        f"1,0,0,0,100,100,0,0,1,{text_outline_px},{shadow_px},{alignment},60,60,{margin_v},1"
     )
+    box_style_lines = []
+    if has_box_outline:
+        # BackColour set to the same color defensively (a different libass
+        # build might honour it as the spec describes — see ranking_overlay.py's
+        # identical note), even though it's a no-op on this build.
+        box_style_lines.append(
+            f"Style: HookBoxBorder,{hook_font_name},{hook_px},{invisible_primary},&H000000FF,"
+            f"{box_outline_color},{box_outline_color},1,0,0,0,100,100,0,0,3,{border_pad},0,{alignment},60,60,{margin_v},1"
+        )
+    if has_box_fill:
+        box_style_lines.append(
+            f"Style: HookBoxFill,{hook_font_name},{hook_px},{invisible_primary},&H000000FF,"
+            f"{fill_color},{fill_color},1,0,0,0,100,100,0,0,3,{fill_pad},0,{alignment},60,60,{margin_v},1"
+        )
+    style_line = "\n".join(box_style_lines + [text_style_line])
 
     # Accent power words / numbers / user-requested keywords / any other
     # content word (i.e. not a short glue word) in the highlight colour, so
@@ -2360,8 +2409,9 @@ def build_hook_title_ass(
     if hook_animation == "none":
         entrance = ""
     elif hook_animation == "slide_down":
-        # Approximate a slide-in with a fast vertical unsquash (no \move, which
-        # needs an explicit \pos anchor we don't otherwise use for this style).
+        # Approximate a slide-in with a fast vertical unsquash rather than
+        # \move, which would need its own start/end anchor pair on top of the
+        # shared \pos this function already adds when a box is present.
         entrance = "\\fad(120,240)\\fscy60\\t(0,220,\\fscy100)"
     elif hook_animation == "fade":
         entrance = "\\fad(200,240)"
@@ -2387,14 +2437,28 @@ def build_hook_title_ass(
         entrance = "\\fad(160,240)"
         if template.get("word_pop", True):
             entrance += "\\fscx90\\fscy90\\t(0,160,\\fscx100\\fscy100)"
-    # A hair of edge blur keeps the backing box from reading as a harsh flat
+    # A hair of edge blur keeps the box layers from reading as a harsh flat
     # rectangle — softened corners without needing custom vector geometry.
-    box_soften = "\\blur1" if border_style == 3 else ""
-    override_tags = f"{{{box_soften}{entrance}}}" if (box_soften or entrance) else ""
-    events = [
+    box_tags = f"\\blur1{pos_tag}{entrance}"
+    text_tags = f"{pos_tag}{entrance}"
+    box_override = f"{{{box_tags}}}" if box_tags else ""
+    text_override = f"{{{text_tags}}}" if text_tags else ""
+
+    events = []
+    if has_box_outline:
+        events.append(
+            f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},HookBoxBorder,,0,0,0,,"
+            f"{box_override}{text}"
+        )
+    if has_box_fill:
+        events.append(
+            f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},HookBoxFill,,0,0,0,,"
+            f"{box_override}{text}"
+        )
+    events.append(
         f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
-        f"{override_tags}{text}"
-    ]
+        f"{text_override}{text}"
+    )
     return style_line, events, image_overlays
 
 
@@ -2478,10 +2542,12 @@ def build_assemblyai_ass_subtitles(
     scaled outline + drop shadow, and an optional pill behind the active word.
     When ``hook_title`` is set, an AI-written headline is burned into the top
     safe area while the hook plays out (it renders even when word-synced
-    captions are unavailable or disabled via ``include_captions``). Any
-    emoji in the hook can't be burned in as ASS text (see build_hook_title_ass);
-    when found, they're appended to ``hook_image_overlays_out`` (if given) for
-    the caller to composite as a post-render image-overlay pass.
+    captions are unavailable or disabled via ``include_captions``). Neither
+    the hook's own trailing emoji nor a caption line's keyword emoji can be
+    burned in as ASS text (see build_hook_title_ass and CLAUDE.md); both are
+    appended to ``hook_image_overlays_out`` (if given) for the caller to
+    composite together as one post-render image-overlay pass, the name
+    predating captions gaining the same treatment.
     """
     transcript_data = load_cached_transcript_data(video_path)
 
@@ -2510,8 +2576,12 @@ def build_assemblyai_ass_subtitles(
 
     # --- styling knobs (new template fields, all optional) ---
     uppercase = bool(template.get("uppercase"))
-    # Only inject emojis when the runtime can actually render them in colour.
-    enable_emoji = bool(template.get("emoji", True)) and emoji_rendering_supported()
+    # Keyword emoji are composited as trailing image overlays on each caption
+    # line (see the chunk loop below), not burned in as ASS text — this
+    # libass build can't rasterise colour emoji glyphs through the subtitles
+    # filter (see CLAUDE.md), so `emoji_rendering_supported()` only gates the
+    # (permanently disabled) ASS-text path, not this one.
+    enable_emoji = bool(template.get("emoji", True))
     word_pop = bool(template.get("word_pop", True))
     word_box = bool(template.get("word_box"))
     glow = bool(template.get("glow"))
@@ -2671,8 +2741,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     line_prefix = f"{{\\pos({video_width // 2},{y_pos})" + ("\\blur4" if glow else "") + "}"
 
-    # Every word span re-declares the caption font, so an emoji's \fn override
-    # can never leak into the following word.
     font_tag = f"\\fn{font_name}"
 
     def render_text(global_idx: int, word: Dict[str, Any]) -> str:
@@ -2680,11 +2748,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if uppercase:
             text = text.upper()
         disp = escape_ass_text(text)
-        emoji = emoji_by_idx.get(global_idx)
-        if emoji:
-            # Force the colour-emoji font for the glyph; the next word's span
-            # re-declares the caption font, so no explicit restore is needed.
-            disp = f"{disp} {{\\fn{EMOJI_FONT_NAME}}}{emoji}"
         return disp
 
     # The active word is distinguished by COLOUR only (and an optional box). We
@@ -2716,6 +2779,45 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         indices = list(range(chunk_start, chunk_start + len(chunk)))
         chunk_start += len(chunk)
         chunk_end = float(chunk[-1]["end"])
+
+        # A keyword emoji anywhere in this chunk trails the whole caption
+        # line as an image overlay instead of an ASS glyph (same libass
+        # colour-emoji limitation as the hook title — see CLAUDE.md). Only
+        # one per line (first match wins) so a rare second annotation in the
+        # same short chunk never has to fight for on-screen space; it's
+        # visible for the chunk's whole display window, matching how the old
+        # ASS-embedded glyph showed in every karaoke sub-event of the chunk,
+        # not just its trigger word's own slice.
+        chunk_emoji = next(
+            (emoji_by_idx[gj] for gj in indices if gj in emoji_by_idx), None
+        )
+        if chunk_emoji and hook_image_overlays_out is not None:
+            chunk_display_start = float(chunk[0]["start"])
+            line_text = " ".join(str(w.get("text", "")) for w in chunk)
+            if uppercase:
+                line_text = line_text.upper()
+            line_width = measure_text_width(line_text, effective_font_family, font_name, font_px)
+            glyph_px = round(font_px * 0.85)
+            rendered = render_emoji_cluster_png(chunk_emoji, glyph_px)
+            if rendered:
+                emoji_path, emoji_w, emoji_h = rendered
+                gap = round(font_px * 0.18)
+                emoji_x = round(video_width / 2 + line_width / 2 + gap)
+                # Nudge up from the line's geometric vertical center to match
+                # glyphs' cap-height center, same reasoning as the hook
+                # title's own emoji placement above.
+                emoji_y = round(y_pos - font_px * 0.12 - emoji_h / 2)
+                hook_image_overlays_out.append(
+                    {
+                        "path": emoji_path,
+                        "width": emoji_w,
+                        "height": emoji_h,
+                        "x": emoji_x,
+                        "y": emoji_y,
+                        "start": chunk_display_start,
+                        "end": chunk_end,
+                    }
+                )
 
         if animation == "karaoke":
             for local_i, word in enumerate(chunk):
@@ -4540,6 +4642,9 @@ def create_optimized_clip(
                         )
 
             if hook_image_overlays:
+                # Covers both the hook's own trailing emoji and any caption
+                # line's keyword emoji (build_assemblyai_ass_subtitles appends
+                # both kinds to this same list) — one combined overlay pass.
                 hook_emoji_out_path = temp_root / "with_hook_emoji.mp4"
                 try:
                     hook_overlay_ok = overlay_image_overlays_ffmpeg(
@@ -4548,14 +4653,14 @@ def create_optimized_clip(
                 except Exception:
                     hook_overlay_ok = False
                     logger.exception(
-                        "Hook emoji overlay pass raised for %s", output_path
+                        "Hook/caption emoji overlay pass raised for %s", output_path
                     )
                 if hook_overlay_ok:
                     shutil.move(str(hook_emoji_out_path), str(output_path))
                     enforce_size_cap(output_path)
                 else:
                     logger.warning(
-                        "Hook emoji overlay pass failed for %s; clip kept without hook emoji",
+                        "Hook/caption emoji overlay pass failed for %s; clip kept without those emoji",
                         output_path,
                     )
 
