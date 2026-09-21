@@ -2055,6 +2055,90 @@ def measure_text_width(text: str, font_family: Optional[str], font_name: str, px
     return len(text) * px * 0.55  # rough fallback if fontconfig/Pillow fails
 
 
+_RENDERED_TEXT_WIDTH_CACHE: Dict[Tuple[str, str, int, int], Optional[float]] = {}
+
+
+def measure_rendered_text_width(
+    text: str, ass_font_name_value: str, px: int, outline_px: int = 0
+) -> Optional[float]:
+    """Real libass-rendered ink width for `text`, by actually rendering one
+    line through ffmpeg's `ass` filter and measuring the output's alpha
+    bounding box — not an estimate.
+
+    Pillow's plain-layout `getlength()` (measure_text_width) doesn't
+    reproduce libass/HarfBuzz's real shaping closely enough on some bundled
+    display fonts to place things pixel-accurately: verified directly on
+    THEBOLDFONT, a 5-word line measured ~756px via Pillow but rendered at
+    ~799px through libass — a 43px error, easily larger than an entire word
+    of slack. That's what kept throwing off hook box/emoji alignment even
+    after the font-resolution bug (see caption_font_family above) was fixed.
+    This asks the actual renderer instead of guessing. Returns None (letting
+    the caller fall back to measure_text_width) if ffmpeg/libass isn't
+    available or rendering fails for any reason.
+    """
+    if not text:
+        return 0.0
+    cache_key = (text, ass_font_name_value, px, outline_px)
+    if cache_key in _RENDERED_TEXT_WIDTH_CACHE:
+        return _RENDERED_TEXT_WIDTH_CACHE[cache_key]
+
+    pad = max(20, px)
+    canvas_w = pad * 2 + px * max(1, len(text)) * 2
+    canvas_h = px * 3
+    style_line = (
+        f"Style: M,{ass_font_name_value},{px},&H00FFFFFF&,&H000000FF,&H00000000&,&H00000000,"
+        f"1,0,0,0,100,100,0,0,1,{outline_px},0,7,0,0,0,1"
+    )
+    ass_doc = (
+        "[Script Info]\nScriptType: v4.00+\n"
+        f"PlayResX: {canvas_w}\nPlayResY: {canvas_h}\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"{style_line}\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        f"Dialogue: 0,0:00:00.00,0:00:01.00,M,,0,0,0,,{{\\an7\\pos({pad},{pad})}}{escape_ass_text(text)}\n"
+    )
+    # A solid chroma-key background rather than a "transparent" canvas — a
+    # `color=...@0.0` source doesn't actually survive ffmpeg's default RGB
+    # pipeline into the PNG's alpha channel (verified directly: measuring
+    # a bare space this way returned the full canvas size, not zero), so
+    # alpha-bbox detection silently measured nothing at all. Pure green is
+    # never a hook text/outline color, so "not background" is unambiguous.
+    bg = (0, 255, 0)
+    result: Optional[float] = None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ass_path = tmp_path / "m.ass"
+            ass_path.write_text(ass_doc, encoding="utf-8")
+            out_path = tmp_path / "m.png"
+            vf = f"ass={ass_path}:fontsdir={FONTS_DIR}" if FONTS_DIR.exists() else f"ass={ass_path}"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", f"color=c=0x00ff00:s={canvas_w}x{canvas_h}",
+                    "-vf", vf,
+                    "-frames:v", "1", "-update", "1", str(out_path),
+                ],
+                capture_output=True,
+                timeout=10,
+                check=True,
+            )
+            from PIL import Image
+
+            arr = np.array(Image.open(out_path).convert("RGB"))
+            diff = np.abs(arr.astype(int) - np.array(bg)).sum(axis=2)
+            ys, xs = np.where(diff > 40)
+            result = float(xs.max() - xs.min()) if xs.size else 0.0
+    except Exception:
+        result = None
+    _RENDERED_TEXT_WIDTH_CACHE[cache_key] = result
+    return result
+
+
 def measure_font_metrics(font_family: Optional[str], font_name: str, px: int) -> Tuple[float, float]:
     """Real (ascent, descent) for `font_name`/`font_family` at `px` — lets a
     trailing hook emoji sit on the same baseline as the surrounding text
@@ -2252,6 +2336,7 @@ def build_hook_title_ass(
     caption_font_px: int,
     hook_style: Optional[Dict[str, Any]] = None,
     highlight_words: Optional[List[str]] = None,
+    caption_font_family: Optional[str] = None,
 ) -> Tuple[str, List[str], List[Dict[str, Any]]]:
     """Build the (style_line, dialogue_events, image_overlays) for a
     burned-in hook title.
@@ -2279,7 +2364,15 @@ def build_hook_title_ass(
     uppercase = bool(template.get("uppercase"))
     title_text = hook_title.upper() if uppercase else hook_title
 
-    hook_font_family = effective.get("hook_font_family")
+    # Falls back to the caption template's own font (not just an explicit
+    # hook-specific override) because measure_text_width/measure_font_metrics
+    # need a real lookup key for find_font_path — a bundled font like
+    # "THEBOLDFONT" resolves correctly there, but fontconfig's fc-match (the
+    # other resolution path, meant for genuine system fonts) has no idea
+    # about it and was silently substituting an unrelated system font, which
+    # threw off every measurement-based emoji/box placement for the default,
+    # no-override case (i.e. almost always).
+    hook_font_family = effective.get("hook_font_family") or caption_font_family
     hook_font_name = ass_font_name(hook_font_family) if hook_font_family else font_name
 
     primary = hex_to_ass_color(
@@ -2380,8 +2473,6 @@ def build_hook_title_ass(
         pos_y = video_height // 2
     else:
         pos_y = margin_v
-    pos_tag = f"\\an{alignment}\\pos({pos_x},{pos_y})" if has_box else ""
-
     text_style_line = (
         f"Style: Hook,{hook_font_name},{hook_px},{primary},&H000000FF,{text_outline_color},&H00000000,"
         f"1,0,0,0,100,100,0,0,1,{text_outline_px},{shadow_px},{alignment},60,60,{margin_v},1"
@@ -2442,6 +2533,28 @@ def build_hook_title_ass(
     else:  # top-anchored (an8): pos_y is the block's top edge
         block_top = pos_y
 
+    def _line_width(line: str) -> float:
+        # Prefer actually rendering the line through libass and measuring
+        # its real ink — see measure_rendered_text_width for why the
+        # Pillow-based estimate alone isn't trustworthy on every font.
+        rendered_width = measure_rendered_text_width(line, hook_font_name, hook_px, text_outline_px)
+        if rendered_width is not None:
+            return rendered_width
+        return measure_text_width(line, hook_font_family, hook_font_name, hook_px)
+
+    # Per-line widths, used both to size the background box and to center
+    # each line. If there's a trailing emoji, it's folded into the LAST
+    # line's own width here (text + a space-width gap + the emoji), before
+    # anything is centered — so the "line" being centered is the same
+    # text+emoji unit the viewer sees, the same way a real sentence with an
+    # emoji typed at the end would be. Every downstream position (the box,
+    # the text, the emoji itself) is derived from this one list, so they
+    # can't drift out of sync with each other the way separately-computed
+    # positions could.
+    line_widths = [_line_width(line) for line in lines] or [0.0]
+    last_line_top = block_top + (num_lines - 1) * line_height
+    last_line_left = pos_x - line_widths[-1] / 2
+
     image_overlays: List[Dict[str, Any]] = []
     if emoji_cluster:
         # render_emoji_cluster_png crops tight to the glyph's own bbox, and
@@ -2453,19 +2566,27 @@ def build_hook_title_ass(
         rendered = render_emoji_cluster_png(emoji_cluster, glyph_px)
         if rendered:
             emoji_path, emoji_w, emoji_h = rendered
-            last_line_text = lines[-1] if lines else ""
-            last_line_top = block_top + (num_lines - 1) * line_height
+            text_only_width = line_widths[-1]
+            # The same gap a real space character between words would leave.
+            gap = (
+                measure_rendered_text_width("A A", hook_font_name, hook_px, text_outline_px)
+                or measure_text_width("A A", hook_font_family, hook_font_name, hook_px)
+                or hook_px
+            )
+            gap -= 2 * (
+                measure_rendered_text_width("A", hook_font_name, hook_px, text_outline_px)
+                or measure_text_width("A", hook_font_family, hook_font_name, hook_px)
+                or hook_px * 0.5
+            )
+            gap = max(gap, hook_px * 0.08)
+            line_widths[-1] = text_only_width + gap + emoji_w
+            last_line_left = pos_x - line_widths[-1] / 2
             ascent, _descent = measure_font_metrics(hook_font_family, hook_font_name, hook_px)
             # Sit on the same baseline as the text around it, like an inline
             # character rather than a separately-positioned overlay — no
             # cap-height/center guesswork, just where a glyph would land.
             baseline_y = last_line_top + ascent
-            last_line_width = measure_text_width(
-                last_line_text, hook_font_family, hook_font_name, hook_px
-            )
-            # The same gap a real space character between words would leave.
-            gap = measure_text_width(" ", hook_font_family, hook_font_name, hook_px) or hook_px * 0.25
-            emoji_x = round(video_width / 2 + last_line_width / 2 + gap)
+            emoji_x = round(last_line_left + text_only_width + gap)
             emoji_y = round(baseline_y - emoji_h)
             emoji_x = max(0, min(emoji_x, video_width - emoji_w))
             emoji_y = max(0, min(emoji_y, video_height - emoji_h))
@@ -2513,35 +2634,38 @@ def build_hook_title_ass(
         entrance = "\\fad(160,240)"
         if template.get("word_pop", True):
             entrance += "\\fscx90\\fscy90\\t(0,160,\\fscx100\\fscy100)"
+    # An emoji forces explicit positioning even without a box (see below,
+    # the last line gets its own precisely-centered Dialogue) — without a
+    # box, every other line still relies on plain automatic layout, which is
+    # unaffected by (and unrelated to) this.
+    needs_explicit_pos = has_box or bool(image_overlays)
+    pos_tag = f"\\an{alignment}\\pos({pos_x},{pos_y})" if needs_explicit_pos else ""
     text_tags = f"{pos_tag}{entrance}"
     text_override = f"{{{text_tags}}}" if text_tags else ""
 
     events = []
     if has_box:
-        block_width = max(
-            (measure_text_width(line, hook_font_family, hook_font_name, hook_px) for line in lines),
-            default=0.0,
-        )
+        # block_width already has the trailing emoji folded into the last
+        # line's own width (see line_widths above) — a box sized off this
+        # is centered on exactly the same content that's actually centered
+        # on screen, so its left/right padding can't drift the way growing
+        # the box asymmetrically toward the emoji used to.
+        block_width = max(line_widths, default=0.0)
 
         fill_box_w = block_width + 2 * fill_pad
         fill_box_h = block_height + 2 * fill_pad
         fill_box_left = pos_x - fill_box_w / 2
         fill_box_top = block_top - fill_pad
-        fill_box_right = fill_box_left + fill_box_w
-        fill_box_bottom = fill_box_top + fill_box_h
         if image_overlays:
-            # Extend whichever edges the emoji actually sits past, rather than
-            # widening the box symmetrically around its center — the emoji
-            # only ever sticks out to one side, so growing both sides equally
-            # both under-covers that side and needlessly widens the other.
+            # The emoji sits inline within the last line's own (now widened)
+            # width, so this box already covers it horizontally — this only
+            # guards the rare case of an emoji taller than the line itself.
             overlay = image_overlays[0]
             emoji_pad = fill_pad * 0.5
-            fill_box_left = min(fill_box_left, overlay["x"] - emoji_pad)
-            fill_box_right = max(fill_box_right, overlay["x"] + overlay["width"] + emoji_pad)
             fill_box_top = min(fill_box_top, overlay["y"] - emoji_pad)
-            fill_box_bottom = max(fill_box_bottom, overlay["y"] + overlay["height"] + emoji_pad)
-            fill_box_w = fill_box_right - fill_box_left
-            fill_box_h = fill_box_bottom - fill_box_top
+            fill_box_h = max(
+                fill_box_h, overlay["y"] + overlay["height"] + emoji_pad - fill_box_top
+            )
 
         border_extra = border_pad - fill_pad
         border_box_w = fill_box_w + 2 * border_extra
@@ -2579,10 +2703,29 @@ def build_hook_title_ass(
                 f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},HookBox,,0,0,0,,"
                 f"{{{fill_tags}}}{fill_path}{{\\p0}}"
             )
-    events.append(
-        f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
-        f"{text_override}{text}"
-    )
+    if image_overlays:
+        # The last line carries the emoji, so it's centered as its own unit
+        # (text + gap + emoji, computed above into last_line_left) rather
+        # than relying on ASS's automatic per-line centering, which only
+        # knows about the text and would center that alone — leaving the
+        # emoji hanging off one side instead of the whole unit being
+        # centered like a normal line of text would be.
+        other_lines_text = "\\N".join(rendered_lines[:-1])
+        if other_lines_text:
+            events.append(
+                f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
+                f"{text_override}{other_lines_text}"
+            )
+        last_line_tags = f"\\an7\\pos({round(last_line_left)},{round(last_line_top)}){entrance}"
+        events.append(
+            f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
+            f"{{{last_line_tags}}}{rendered_lines[-1] if rendered_lines else ''}"
+        )
+    else:
+        events.append(
+            f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
+            f"{text_override}{text}"
+        )
     return style_line, events, image_overlays
 
 
@@ -2787,6 +2930,7 @@ def build_assemblyai_ass_subtitles(
                 font_px,
                 hook_style,
                 highlight_words,
+                effective_font_family,
             )
             hook_style_block = f"{hook_style_line}\n"
             if hook_image_overlays_out is not None:
