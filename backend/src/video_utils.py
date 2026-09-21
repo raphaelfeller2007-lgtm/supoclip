@@ -9,6 +9,7 @@ import logging
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 import re
 import uuid
 import shutil
@@ -41,12 +42,32 @@ from .caption_templates import get_template, CAPTION_TEMPLATES
 from .emoji_captions import POWER_WORDS, annotate_caption_words, normalize_token
 from .font_registry import FONTS_DIR, find_font_path, get_font_family_name
 
+# Hook-only (not shared with captions' POWER_WORDS): glue words excluded from
+# the broadened hook highlight rule below, so the highlight colour lands on
+# most content words rather than only the sparser POWER_WORDS set.
+_HOOK_STOPWORDS = {
+    "a", "an", "the", "to", "of", "in", "on", "at", "by", "for", "and", "or",
+    "but", "if", "so", "is", "are", "was", "were", "be", "been", "being",
+    "with", "as", "from", "it", "its", "this", "that", "these", "those",
+    "my", "your", "his", "her", "their", "our", "i", "you", "he", "she",
+    "we", "they", "not", "no", "do", "does", "did", "will", "would", "can",
+    "could", "should", "than", "then", "when", "how", "what", "why", "who",
+    "up", "out", "into", "over", "about",
+}
+
 logger = logging.getLogger(__name__)
 TRANSCRIPT_CACHE_SCHEMA_VERSION = 2
 VALID_OUTPUT_FORMATS = {"vertical", "vertical_pan", "vertical_split", "original"}
-# Family name of the bundled colour-emoji font (fonts/NotoColorEmoji.ttf). We
-# force it explicitly per-emoji via an ASS \fn override so libass renders colour
-# emojis reliably instead of depending on automatic Unicode font fallback.
+# Family name libass is asked for when a caption wants an emoji glyph (forced
+# per-emoji via an ASS \fn override rather than relying on automatic Unicode
+# font fallback). Not bundled: this project's ffmpeg/libass build cannot
+# composite full-colour glyphs via the subtitles filter regardless of which
+# colour-emoji font is installed or how it's supplied (verified directly —
+# neither a system-installed Noto Color Emoji (CBDT/bitmap) nor a bundled
+# Twemoji Mozilla (COLR/CPAL) font renders any pixels through this path), so
+# `emoji_rendering_supported()` below reliably self-diagnoses to False and
+# caption emoji injection stays off. Burned-in emoji reactions use true-colour
+# image overlays instead (see emoji_reactions.py / backend/assets/emoji/).
 EMOJI_FONT_NAME = "Noto Color Emoji"
 CLIP_END_SENTENCE_EXTENSION_SECONDS = 3.0
 CLIP_END_PADDING_SECONDS = 0.35
@@ -745,6 +766,39 @@ def get_subtitle_max_width(video_width: int) -> int:
     return max(200, video_width - (horizontal_padding * 2))
 
 
+def _estimate_caption_text_width_px(text: str, font_px: int) -> float:
+    """Rough glyph-width estimate, same 0.52-per-character heuristic used for
+    hook title shrink-to-fit (see build_hook_title_ass) — good enough to catch
+    overflow without needing real font metrics."""
+    return len(text) * font_px * 0.52
+
+
+def _split_caption_chunks(
+    words: List[Dict[str, Any]], max_words: int, font_px: int, usable_width: int
+) -> List[List[Dict[str, Any]]]:
+    """Group words into caption chunks capped by both word count and estimated
+    on-screen width, so a chunk of otherwise-short words doesn't run off the
+    safe area just because `max_words_per_line` allowed too many of them.
+    """
+    chunks: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    current_text = ""
+    for word in words:
+        text = str(word.get("text", ""))
+        candidate_text = f"{current_text} {text}".strip()
+        candidate_width = _estimate_caption_text_width_px(candidate_text, font_px)
+        if current and (len(current) >= max_words or candidate_width > usable_width):
+            chunks.append(current)
+            current = [word]
+            current_text = text
+        else:
+            current.append(word)
+            current_text = candidate_text
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def get_safe_vertical_position(
     video_height: int, text_height: int, position_y: float
 ) -> int:
@@ -1237,12 +1291,79 @@ AUDIO_BITRATE = "192k"
 LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
 
+_GPU_ENCODER_CACHE: Optional[str] = None  # None = unchecked; "" = none available
+
+
+def detect_gpu_encoder() -> Optional[str]:
+    """The working hardware H.264 encoder name, or None if unavailable.
+
+    Only NVENC is probed today — VAAPI/QSV each need their own device/filter
+    setup (hwupload, format negotiation, etc.), which is a real pipeline
+    change per vendor, not a one-line encoder swap; adding them is tracked as
+    follow-up, not built here. Actually attempts a trivial encode rather than
+    just checking ffmpeg's compiled encoder list, since an NVENC-capable
+    ffmpeg build with no NVIDIA GPU/driver present would otherwise report
+    "supported" and then fail for real at render time — same probe-don't-
+    assume approach as `emoji_rendering_supported()`.
+    """
+    global _GPU_ENCODER_CACHE
+    if _GPU_ENCODER_CACHE is not None:
+        return _GPU_ENCODER_CACHE or None
+
+    found = ""
+    try:
+        probe = run_ffmpeg_command(
+            [
+                "ffmpeg", "-y",
+                "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1",
+                "-c:v", "h264_nvenc",
+                "-frames:v", "1",
+                "-f", "null", "-",
+            ],
+            timeout=20,
+        )
+        if probe.returncode == 0:
+            found = "h264_nvenc"
+    except Exception as exc:
+        logger.info("GPU encoder probe failed (%s); falling back to CPU encoding", exc)
+
+    _GPU_ENCODER_CACHE = found
+    logger.info("GPU (NVENC) encoding available: %s", bool(found))
+    return found or None
+
+
 def build_final_video_encode_args(
     crf: int = FINAL_VIDEO_CRF,
     preset: str = FINAL_VIDEO_PRESET,
     fps: int = OUTPUT_FPS,
+    use_gpu: bool = False,
 ) -> List[str]:
-    """libx264 args for the quality-determining final pass (CFR, H.264 High)."""
+    """Video encode args for the quality-determining final pass (CFR, H.264 High).
+
+    `use_gpu` reflects the user's GPU-acceleration setting, but is only ever
+    honoured if `detect_gpu_encoder()` confirms a working encoder is actually
+    present — the setting can say "on" while the toggle itself is disabled
+    for another reason, and hardware can also disappear between when the
+    setting was saved and when a render runs, so this always re-verifies
+    rather than trusting the flag blindly. Falls back to libx264 silently
+    (successfully) whenever GPU isn't actually usable, which is the correct
+    behaviour here — the *setting* is where "disabled with a clear reason"
+    is surfaced (see admin runtime settings), not a failed render.
+    """
+    encoder = detect_gpu_encoder() if use_gpu else None
+    if encoder == "h264_nvenc":
+        return [
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",
+            "-tune", "hq",
+            "-rc", "vbr",
+            "-cq", str(crf),
+            "-b:v", "0",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "high",
+            "-level", "4.1",
+            "-r", str(fps),
+        ]
     return [
         "-c:v", "libx264",
         "-preset", preset,
@@ -1255,15 +1376,117 @@ def build_final_video_encode_args(
     ]
 
 
-def build_audio_output_args(has_audio: bool, loudnorm: bool = True) -> List[str]:
-    """Audio encode args (with optional loudness normalisation) or `-an`."""
+def build_audio_output_args(
+    has_audio: bool, loudnorm: bool = True, target_lufs: float = -14.0
+) -> List[str]:
+    """Audio encode args (with optional loudness normalisation) or `-an`.
+
+    `target_lufs` defaults to -14 (the constant `LOUDNORM_FILTER`'s target)
+    for backward compatibility with existing callers that don't pass one.
+    """
     if not has_audio:
         return ["-an"]
     args: List[str] = []
     if loudnorm:
-        args += ["-af", LOUDNORM_FILTER]
+        if target_lufs == -14.0:
+            loudnorm_filter = LOUDNORM_FILTER
+        else:
+            loudnorm_filter = f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11"
+        args += ["-af", loudnorm_filter]
     args += ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", "48000"]
     return args
+
+
+# --- output size cap -------------------------------------------------------
+# Applied after every final-pass encode (main render, subtitle-burn pass, and
+# preset export) so no single output blows past a sane upload/storage limit.
+DEFAULT_SIZE_CAP_BYTES = 300 * 1024 * 1024
+# Quality floor: never let the computed bitrate drop low enough to produce a
+# visibly garbage re-encode, even for a very long clip against the cap.
+MIN_VIDEO_BITRATE_BPS = 800_000
+SIZE_CAP_AUDIO_BITRATE_BPS = 192_000
+
+
+def enforce_size_cap(
+    file_path: Path,
+    target_bytes: int = DEFAULT_SIZE_CAP_BYTES,
+) -> bool:
+    """Re-encode `file_path` in place (two-pass libx264) if it exceeds
+    `target_bytes`; otherwise leaves it untouched.
+
+    Prioritises quality: only compresses as much as needed to land under the
+    cap, computing an average video bitrate from the file's duration and the
+    byte budget, with a quality floor (`MIN_VIDEO_BITRATE_BPS`) so a very long
+    clip against the cap doesn't degrade into an unwatchable re-encode.
+
+    Returns True if the file was re-encoded, False if it was left alone or
+    the re-encode failed (in which case the original file is untouched).
+    """
+    try:
+        current_size = file_path.stat().st_size
+    except OSError as e:
+        logger.warning(f"enforce_size_cap: could not stat {file_path}: {e}")
+        return False
+
+    if current_size <= target_bytes:
+        return False
+
+    try:
+        duration = ffprobe_duration(file_path)
+    except Exception as e:
+        logger.warning(f"enforce_size_cap: could not read duration for {file_path}: {e}")
+        return False
+    if duration <= 0:
+        return False
+
+    has_audio = ffprobe_has_audio(file_path)
+    audio_bps = SIZE_CAP_AUDIO_BITRATE_BPS if has_audio else 0
+
+    # 2% headroom for container/muxing overhead so we land safely under the cap.
+    target_total_bps = (target_bytes * 8 / duration) * 0.98
+    video_bps = max(MIN_VIDEO_BITRATE_BPS, int(target_total_bps - audio_bps))
+
+    logger.info(
+        "enforce_size_cap: %s is %.1fMB (> %.1fMB cap); re-encoding at ~%dkbps video",
+        file_path, current_size / (1024 * 1024), target_bytes / (1024 * 1024), video_bps // 1000,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="supoclip_sizecap_") as temp_dir:
+        temp_root = Path(temp_dir)
+        output_path = temp_root / f"capped{file_path.suffix or '.mp4'}"
+        passlogfile = str(temp_root / "ffmpeg2pass")
+        null_output = "NUL" if os.name == "nt" else "/dev/null"
+
+        pass1 = [
+            "ffmpeg", "-y", "-i", str(file_path),
+            "-c:v", "libx264", "-b:v", str(video_bps),
+            "-preset", "slow", "-pass", "1", "-passlogfile", passlogfile,
+            "-an", "-f", "mp4", null_output,
+        ]
+        result1 = run_ffmpeg_command(pass1)
+        if result1.returncode != 0:
+            logger.error(f"enforce_size_cap: pass 1 failed for {file_path}: {result1.stderr}")
+            return False
+
+        audio_args = build_audio_output_args(has_audio)
+        pass2 = [
+            "ffmpeg", "-y", "-i", str(file_path),
+            "-c:v", "libx264", "-b:v", str(video_bps),
+            "-preset", "slow", "-pass", "2", "-passlogfile", passlogfile,
+            "-pix_fmt", "yuv420p",
+            *audio_args,
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+        result2 = run_ffmpeg_command(pass2)
+        if result2.returncode != 0:
+            logger.error(f"enforce_size_cap: pass 2 failed for {file_path}: {result2.stderr}")
+            return False
+
+        shutil.move(str(output_path), str(file_path))
+
+    logger.info(f"enforce_size_cap: re-encoded {file_path} to {file_path.stat().st_size / (1024*1024):.1f}MB")
+    return True
 
 
 def subtitles_filter_fragment(
@@ -1678,6 +1901,249 @@ def extend_keep_ranges_to_sentence_boundary(
     return [*normalized[:-1], (last_start, extended_end)]
 
 
+# The `subtitles`/libass filter can't rasterise colour-emoji glyphs at all
+# (verified — see CLAUDE.md's "Common Pitfalls"), but Pillow's
+# `embedded_color` text mode CAN render the same CBDT/COLR font directly.
+# Shared by the hook builder below and ranking_overlay.py: emoji are split
+# out of the ASS text, pre-rendered to standalone PNGs here, and composited
+# by the caller as `overlay` filter images instead — the same technique
+# emoji_reactions.py already uses for reaction emoji, generalized to
+# arbitrary user/AI-typed emoji instead of a curated PNG set.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"  # regional indicators (flags)
+    "\U0001F300-\U0001FAFF"  # symbols, pictographs, transport, supplemental
+    "\U00002600-\U000027BF"  # misc symbols, dingbats
+    "\U00002B00-\U00002BFF"  # misc symbols and arrows
+    "\U0001F000-\U0001F0FF"  # mahjong/dominoes/playing cards
+    "\uFE0F"  # variation selector-16
+    "\u200D"  # zero-width joiner
+    "]+"
+)
+
+
+def split_text_and_emoji(text: str) -> Tuple[str, str]:
+    """Split `text` into (clean_text_for_ass, emoji_cluster) — every emoji
+    run removed from the text and concatenated back together in the order
+    found. The two are rendered through different paths (ASS text vs. a
+    composited PNG, see render_emoji_cluster_png) and recombined visually
+    at render time by positioning the emoji cluster right after the text."""
+    emoji_cluster = "".join(_EMOJI_RE.findall(text or ""))
+    clean_text = _EMOJI_RE.sub("", text or "").strip()
+    return clean_text, emoji_cluster
+
+
+_EMOJI_FONT_PATH_CACHE: Optional[str] = None
+
+
+def _emoji_font_path() -> Optional[str]:
+    """Locate a colour-emoji font file via fontconfig for direct Pillow
+    rendering. Cached (one-shot, like emoji_rendering_supported()); returns
+    None if this environment has no colour-emoji font, in which case emoji
+    overlays are skipped entirely (same graceful degradation captions use)."""
+    global _EMOJI_FONT_PATH_CACHE
+    if _EMOJI_FONT_PATH_CACHE is not None:
+        return _EMOJI_FONT_PATH_CACHE or None
+    path = ""
+    try:
+        result = subprocess.run(
+            ["fc-match", "-f", "%{file}", "Noto Color Emoji"],
+            capture_output=True, text=True, timeout=5,
+        )
+        candidate = result.stdout.strip()
+        if candidate and Path(candidate).is_file():
+            path = candidate
+    except Exception:
+        path = ""
+    _EMOJI_FONT_PATH_CACHE = path
+    return path or None
+
+
+_FC_MATCH_FONT_PATH_CACHE: Dict[str, Optional[str]] = {}
+
+
+def _fc_match_font_path(font_name: str) -> Optional[str]:
+    if font_name in _FC_MATCH_FONT_PATH_CACHE:
+        return _FC_MATCH_FONT_PATH_CACHE[font_name]
+    path: Optional[str] = None
+    try:
+        result = subprocess.run(
+            ["fc-match", "-f", "%{file}", font_name],
+            capture_output=True, text=True, timeout=5,
+        )
+        candidate = result.stdout.strip()
+        if candidate and Path(candidate).is_file():
+            path = candidate
+    except Exception:
+        path = None
+    _FC_MATCH_FONT_PATH_CACHE[font_name] = path
+    return path
+
+
+def measure_text_width(text: str, font_family: Optional[str], font_name: str, px: int) -> float:
+    """Measure `text`'s rendered pixel width at `px`, so emoji placement can
+    position the emoji cluster right after real text instead of guessing
+    from character count. Prefers a bundled/uploaded font file (matching
+    what libass will actually use for a custom font_family); otherwise
+    resolves the ASS style's font_name via fontconfig, same as the system
+    font libass falls back to."""
+    if not text:
+        return 0.0
+    font_path = None
+    if font_family:
+        custom = find_font_path(font_family, allow_all_user_fonts=True)
+        if custom:
+            font_path = str(custom)
+    if not font_path:
+        font_path = _fc_match_font_path(font_name)
+    if font_path:
+        try:
+            from PIL import ImageFont
+
+            return ImageFont.truetype(font_path, px).getlength(text)
+        except Exception:
+            pass
+    return len(text) * px * 0.55  # rough fallback if fontconfig/Pillow fails
+
+
+# Bundled colour-emoji fonts (Noto Color Emoji, Apple Color Emoji, etc.) are
+# CBDT/sbix bitmap fonts with only a handful of fixed embedded strike sizes —
+# requesting any other size raises "invalid pixel size" rather than scaling.
+# Rendered once at whichever candidate size the font actually supports, then
+# resized in Pillow to the target size.
+_EMOJI_FONT_NATIVE_SIZES = (109, 136, 128, 160, 96, 64, 32)
+
+_EMOJI_PNG_CACHE: Dict[Tuple[str, int], Optional[Path]] = {}
+
+
+def render_emoji_cluster_png(emoji_text: str, px: int) -> Optional[Tuple[Path, int, int]]:
+    """Render `emoji_text` (one or more emoji characters) to a transparent
+    PNG using Pillow's `embedded_color` draw mode against the system's
+    colour-emoji font, at roughly `px`-tall glyphs. Cached to a temp file per
+    (text, size). Returns (path, width, height), or None if no colour-emoji
+    font is available in this environment.
+    """
+    if not emoji_text:
+        return None
+    cache_key = (emoji_text, px)
+    if cache_key in _EMOJI_PNG_CACHE:
+        cached = _EMOJI_PNG_CACHE[cache_key]
+        if cached is None:
+            return None
+        from PIL import Image
+
+        with Image.open(cached) as probe:
+            return cached, probe.width, probe.height
+
+    font_path = _emoji_font_path()
+    if not font_path:
+        _EMOJI_PNG_CACHE[cache_key] = None
+        return None
+
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        font = None
+        native_size = None
+        for candidate in _EMOJI_FONT_NATIVE_SIZES:
+            try:
+                font = ImageFont.truetype(font_path, candidate)
+                native_size = candidate
+                break
+            except OSError:
+                continue
+        if font is None:
+            _EMOJI_PNG_CACHE[cache_key] = None
+            return None
+
+        pad = max(4, native_size // 8)
+        canvas = Image.new(
+            "RGBA",
+            (native_size * len(emoji_text) + pad * 2, native_size + pad * 2),
+            (0, 0, 0, 0),
+        )
+        draw = ImageDraw.Draw(canvas)
+        draw.text((pad, pad), emoji_text, font=font, embedded_color=True)
+        bbox = canvas.getbbox()
+        if not bbox:
+            _EMOJI_PNG_CACHE[cache_key] = None
+            return None
+        cropped = canvas.crop(bbox)
+        if native_size != px:
+            scale = px / native_size
+            new_size = (max(1, round(cropped.width * scale)), max(1, round(cropped.height * scale)))
+            cropped = cropped.resize(new_size, Image.LANCZOS)
+        out_path = Path(tempfile.mkstemp(suffix=".png", prefix="supoclip_emoji_")[1])
+        cropped.save(out_path)
+        _EMOJI_PNG_CACHE[cache_key] = out_path
+        return out_path, cropped.width, cropped.height
+    except Exception:
+        logger.warning("Emoji PNG render failed for %r", emoji_text, exc_info=True)
+        _EMOJI_PNG_CACHE[cache_key] = None
+        return None
+
+
+def overlay_image_overlays_ffmpeg(
+    input_path: Path,
+    output_path: Path,
+    image_overlays: List[Dict[str, Any]],
+) -> bool:
+    """Composite pre-rendered PNGs (see render_emoji_cluster_png) onto
+    `input_path`, each visible for its own [start, end) window with a short
+    fade in/out. Same post-render image-overlay pass emoji_reactions.py uses
+    for reaction emoji, generalized to any {path, width, height, x, y,
+    start, end} overlay spec — used for hook-title emoji, which can't be
+    burned in as ASS text either (see build_hook_title_ass)."""
+    if not image_overlays:
+        return False
+
+    has_audio = ffprobe_has_audio(input_path)
+    inputs: List[str] = ["-i", str(input_path)]
+    filter_parts: List[str] = []
+    last_label = "0:v"
+
+    for index, overlay in enumerate(image_overlays):
+        inputs.extend(["-loop", "1", "-i", str(overlay["path"])])
+        start = float(overlay["start"])
+        end = float(overlay["end"])
+        fade = min(0.25, max(0.05, (end - start) / 4))
+        img_label = f"img{index}"
+        overlay_label = f"ovr{index}"
+        filter_parts.append(
+            f"[{index + 1}:v]format=rgba,"
+            f"fade=t=in:st={start:.3f}:d={fade:.3f}:alpha=1,"
+            f"fade=t=out:st={max(start, end - fade):.3f}:d={fade:.3f}:alpha=1[{img_label}]"
+        )
+        filter_parts.append(
+            f"[{last_label}][{img_label}]overlay=x={overlay['x']}:y={overlay['y']}:"
+            f"enable='between(t,{start:.3f},{end:.3f})'[{overlay_label}]"
+        )
+        last_label = overlay_label
+
+    command = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", f"[{last_label}]",
+    ]
+    if has_audio:
+        command += ["-map", "0:a", "-c:a", "copy"]
+    # The `-loop 1` image inputs never signal EOF on their own; `-shortest`
+    # alone doesn't reliably terminate this filter graph (observed hanging
+    # indefinitely without an explicit output duration, per
+    # emoji_reactions.py's own overlay pass), so cap it directly at the main
+    # video's real length.
+    duration = ffprobe_duration(input_path)
+    command += [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-t", f"{duration:.3f}",
+        str(output_path),
+    ]
+    result = run_ffmpeg_command(command, timeout=300)
+    return result.returncode == 0 and output_path.exists()
+
+
 def _balance_title_lines(words: List[str], max_chars: int) -> List[str]:
     """Split title words into one line, or two lines balanced around the middle."""
     text = " ".join(words)
@@ -1704,20 +2170,31 @@ def build_hook_title_ass(
     font_name: str,
     caption_font_px: int,
     hook_style: Optional[Dict[str, Any]] = None,
-) -> Tuple[str, List[str]]:
-    """Build the (style_line, dialogue_events) for a burned-in hook title.
+    highlight_words: Optional[List[str]] = None,
+) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+    """Build the (style_line, dialogue_events, image_overlays) for a
+    burned-in hook title.
 
     The title styling is derived from the caption template's hook_* defaults
     (see caption_templates.TEMPLATE_DEFAULTS), overridden by any non-None keys
     in ``hook_style`` (a per-task customization payload). With no overrides
     and a template's defaults, this renders identically to the original
     fixed top-of-frame fade+pop hook title.
+
+    Any emoji in ``hook_title`` (typically AI-appended at the very end, per
+    ai.py's HOOK_GENERATION_RULES) is split out and returned as
+    ``image_overlays`` instead of burned into the ASS text — this
+    environment's libass can't rasterise colour emoji (see CLAUDE.md), so the
+    caller composites these as a post-render image-overlay pass (see
+    overlay_image_overlays_ffmpeg), same as emoji_reactions.py already does
+    for reaction emoji.
     """
     effective = dict(template)
     for key, value in (hook_style or {}).items():
         if value is not None:
             effective[key] = value
 
+    hook_title, emoji_cluster = split_text_and_emoji(hook_title)
     uppercase = bool(template.get("uppercase"))
     title_text = hook_title.upper() if uppercase else hook_title
 
@@ -1739,15 +2216,18 @@ def build_hook_title_ass(
     back_color = hex_to_ass_color(background_color, "#00000099")
 
     font_size_scale = float(effective.get("hook_font_size_scale") or 0.82)
-    # Slightly smaller than the captions so the spoken words stay the hero.
-    base_px = max(34, min(66, int(caption_font_px * font_size_scale)))
+    # Hook titles are allowed to run noticeably larger than captions since
+    # they only hold the frame briefly at the very top of the clip — the old
+    # 66px ceiling made even the "XL" preset barely register as larger than
+    # captions. This still shrinks to fit long titles below.
+    base_px = max(40, min(160, int(caption_font_px * font_size_scale)))
     usable_width = video_width - 2 * max(48, int(video_width * HOOK_TITLE_TOP_MARGIN_FRAC))
     max_chars = max(10, int(usable_width / (base_px * 0.52)))
     lines = _balance_title_lines(title_text.split(), max_chars)
     longest = max(len(line) for line in lines)
     hook_px = base_px
     if longest > max_chars:
-        hook_px = max(30, min(base_px, int(usable_width / (longest * 0.52))))
+        hook_px = max(36, min(base_px, int(usable_width / (longest * 0.52))))
 
     hook_stroke_width = effective.get("hook_stroke_width")
     base_stroke = int(
@@ -1787,13 +2267,25 @@ def build_hook_title_ass(
         f"1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},{alignment},60,60,{margin_v},1"
     )
 
-    # Accent power words / numbers in the template highlight colour.
+    # Accent power words / numbers / user-requested keywords / any other
+    # content word (i.e. not a short glue word) in the highlight colour, so
+    # the hook reads mostly yellow with only connective words left plain —
+    # a deliberately broader rule than captions' own (sparser) POWER_WORDS
+    # highlighting, since the hook only holds the frame for a few seconds.
+    requested_highlights = {
+        normalize_token(word) for word in (highlight_words or []) if normalize_token(word)
+    }
     rendered_lines: List[str] = []
     for line in lines:
         spans: List[str] = []
         for word in line.split():
             token = normalize_token(word)
-            accented = bool(token) and (token in POWER_WORDS or any(c.isdigit() for c in token))
+            accented = bool(token) and (
+                token in POWER_WORDS
+                or any(c.isdigit() for c in token)
+                or token in requested_highlights
+                or token not in _HOOK_STOPWORDS
+            )
             color = highlight if accented else primary
             spans.append(f"{{\\c{color}}}{escape_ass_text(word)}")
         rendered_lines.append(" ".join(spans))
@@ -1804,6 +2296,52 @@ def build_hook_title_ass(
     end = min(hook_duration, max(HOOK_TITLE_MIN_SECONDS, output_duration - 0.25))
     if output_duration <= HOOK_TITLE_MIN_SECONDS:
         start, end = 0.0, max(0.5, output_duration)
+
+    image_overlays: List[Dict[str, Any]] = []
+    if emoji_cluster:
+        # render_emoji_cluster_png crops tight to the glyph's own bbox, and
+        # colour-emoji glyphs fill nearly their whole em-box (unlike text,
+        # whose cap-height is only ~0.7em) — asking for `hook_px`-tall emoji
+        # made them visibly larger than the surrounding letters. Sizing off
+        # cap-height instead makes the emoji read as part of the text.
+        glyph_px = round(hook_px * 0.78)
+        rendered = render_emoji_cluster_png(emoji_cluster, glyph_px)
+        if rendered:
+            emoji_path, emoji_w, emoji_h = rendered
+            line_height = round(hook_px * 1.2)
+            num_lines = max(1, len(lines))
+            last_line_text = lines[-1] if lines else ""
+            if alignment == 2:  # bottom-anchored (an2)
+                last_line_center_y = video_height - margin_v - line_height / 2
+            elif alignment == 5:  # vertically centered as a block (an5)
+                block_height = num_lines * line_height
+                block_top = video_height / 2 - block_height / 2
+                last_line_center_y = block_top + (num_lines - 1) * line_height + line_height / 2
+            else:  # top-anchored (an8)
+                last_line_center_y = margin_v + (num_lines - 1) * line_height + line_height / 2
+            # Text glyphs sit in the upper portion of the line box (baseline is
+            # well above the box's bottom, to leave descender room most hook
+            # words never use), so their visual cap-height center sits above
+            # the box's geometric center — nudge up to match, or the emoji
+            # reads as sitting low relative to the letters next to it.
+            cap_center_y = last_line_center_y - hook_px * 0.12
+            last_line_width = measure_text_width(
+                last_line_text, hook_font_family, hook_font_name, hook_px
+            )
+            gap = round(hook_px * 0.16)
+            emoji_x = round(video_width / 2 + last_line_width / 2 + gap)
+            emoji_y = round(cap_center_y - emoji_h / 2)
+            image_overlays.append(
+                {
+                    "path": emoji_path,
+                    "width": emoji_w,
+                    "height": emoji_h,
+                    "x": emoji_x,
+                    "y": emoji_y,
+                    "start": start,
+                    "end": end,
+                }
+            )
 
     hook_animation = effective.get("hook_animation") or "fade_pop"
     if hook_animation == "none":
@@ -1844,7 +2382,7 @@ def build_hook_title_ass(
         f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
         f"{override_tags}{text}"
     ]
-    return style_line, events
+    return style_line, events, image_overlays
 
 
 def build_social_overlay_ass(
@@ -1917,6 +2455,8 @@ def build_assemblyai_ass_subtitles(
     highlight_words: Optional[List[str]] = None,
     hook_style: Optional[Dict[str, Any]] = None,
     social_overlay: Optional[Dict[str, Any]] = None,
+    reactions: Optional[List[Dict[str, Any]]] = None,
+    hook_image_overlays_out: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """Generate animated word-synced ASS subtitles from cached AssemblyAI words.
 
@@ -1925,7 +2465,10 @@ def build_assemblyai_ass_subtitles(
     scaled outline + drop shadow, and an optional pill behind the active word.
     When ``hook_title`` is set, an AI-written headline is burned into the top
     safe area while the hook plays out (it renders even when word-synced
-    captions are unavailable or disabled via ``include_captions``).
+    captions are unavailable or disabled via ``include_captions``). Any
+    emoji in the hook can't be burned in as ASS text (see build_hook_title_ass);
+    when found, they're appended to ``hook_image_overlays_out`` (if given) for
+    the caller to composite as a post-render image-overlay pass.
     """
     transcript_data = load_cached_transcript_data(video_path)
 
@@ -1947,8 +2490,9 @@ def build_assemblyai_ass_subtitles(
         else:
             relevant_words = get_words_in_range(transcript_data, clip_start, clip_end)
     social_overlay_enabled = bool(social_overlay and social_overlay.get("enabled"))
-    if not relevant_words and not hook_title and not social_overlay_enabled:
-        logger.warning("No words, hook title, or social overlay available for ASS subtitles")
+    has_reactions = bool(reactions)
+    if not relevant_words and not hook_title and not social_overlay_enabled and not has_reactions:
+        logger.warning("No words, hook title, social overlay, or reactions available for ASS subtitles")
         return False
 
     # --- styling knobs (new template fields, all optional) ---
@@ -1974,6 +2518,18 @@ def build_assemblyai_ass_subtitles(
     )
 
     font_px = get_scaled_font_size(effective_font_size, video_width, video_height)
+    usable_caption_width = get_subtitle_max_width(video_width)
+    # Long-word overflow guard: shrink the font just enough that even the
+    # single longest word in the clip (a long compound word, a URL, etc.)
+    # fits within the horizontal safe area, so it never runs off-screen
+    # regardless of the chosen caption size.
+    longest_word_text = max(
+        (str(w.get("text", "")) for w in relevant_words), key=len, default=""
+    )
+    if longest_word_text:
+        longest_word_width = _estimate_caption_text_width_px(longest_word_text, font_px)
+        if longest_word_width > usable_caption_width:
+            font_px = max(18, int(font_px * usable_caption_width / longest_word_width))
     base_stroke = int(template.get("stroke_width", 3) or 0)
     # Scale the outline with the font so big captions keep a chunky, readable edge.
     outline_px = (
@@ -2003,7 +2559,9 @@ def build_assemblyai_ass_subtitles(
     hook_events: List[str] = []
     social_overlay_block = ""
     social_overlay_events: List[str] = []
-    if hook_title or social_overlay_enabled:
+    reactions_block = ""
+    reactions_events: List[str] = []
+    if hook_title or social_overlay_enabled or has_reactions:
         if keep_ranges:
             ranges = normalize_source_ranges(keep_ranges)
             fades = crossfade_fades_for_ranges(ranges)
@@ -2012,7 +2570,7 @@ def build_assemblyai_ass_subtitles(
             output_duration = max(0.0, clip_end - clip_start)
 
         if hook_title:
-            hook_style_line, hook_events = build_hook_title_ass(
+            hook_style_line, hook_events, hook_image_overlays = build_hook_title_ass(
                 hook_title,
                 template,
                 video_width,
@@ -2021,8 +2579,11 @@ def build_assemblyai_ass_subtitles(
                 font_name,
                 font_px,
                 hook_style,
+                highlight_words,
             )
             hook_style_block = f"{hook_style_line}\n"
+            if hook_image_overlays_out is not None:
+                hook_image_overlays_out.extend(hook_image_overlays)
 
         if social_overlay_enabled:
             social_style_line, social_overlay_events = build_social_overlay_ass(
@@ -2034,6 +2595,30 @@ def build_assemblyai_ass_subtitles(
                 font_px,
             )
             social_overlay_block = f"{social_style_line}\n"
+
+        if has_reactions:
+            # Deferred import: `emoji_reactions` imports helpers from this
+            # module, so importing at module load time would be circular.
+            from .emoji_reactions import (
+                build_emoji_reactions_ass,
+                split_reactions_by_asset_availability,
+            )
+
+            # Reactions with a bundled Twemoji asset are burned as image
+            # overlays in a separate ffmpeg pass after this render (see
+            # create_optimized_clip) — ffmpeg's subtitles filter can't
+            # composite full-colour glyphs. Only reactions with no bundled
+            # asset fall back to the (possibly monochrome/tofu) ASS-text
+            # path, so nothing is silently dropped.
+            _, ass_fallback_reactions = split_reactions_by_asset_availability(reactions)
+            if ass_fallback_reactions:
+                reactions_style_line, reactions_events = build_emoji_reactions_ass(
+                    ass_fallback_reactions,
+                    video_width,
+                    video_height,
+                )
+                if reactions_style_line:
+                    reactions_block = f"{reactions_style_line}\n"
 
     # Contextual emoji + emphasis annotations over the whole clip word list.
     emoji_by_idx, emphasis_idx = annotate_caption_words(
@@ -2054,7 +2639,7 @@ def build_assemblyai_ass_subtitles(
     )
 
     max_words = max(1, int(template.get("max_words_per_line", 4) or 4))
-    chunk_size = max_words
+    caption_chunks = _split_caption_chunks(relevant_words, max_words, font_px, usable_caption_width)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -2066,7 +2651,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font_name},{font_px},{primary},&H000000FF,{outline},{back_color},1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},5,60,60,60,1
-{hook_style_block}{social_overlay_block}
+{hook_style_block}{social_overlay_block}{reactions_block}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
@@ -2113,10 +2698,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     line_entrance = "\\fscx92\\fscy92\\t(0,140,\\fscx100\\fscy100)" if word_pop else ""
 
     events: List[str] = []
-    total = len(relevant_words)
-    for chunk_start in range(0, total, chunk_size):
-        chunk = relevant_words[chunk_start : chunk_start + chunk_size]
+    chunk_start = 0
+    for chunk in caption_chunks:
         indices = list(range(chunk_start, chunk_start + len(chunk)))
+        chunk_start += len(chunk)
         chunk_end = float(chunk[-1]["end"])
 
         if animation == "karaoke":
@@ -2171,14 +2756,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f"Dialogue: 0,{ass_timestamp(start)},{ass_timestamp(end)},Default,,0,0,0,,{line_prefix}{effect}{chunk_text}"
             )
 
-    all_events = hook_events + social_overlay_events + events
+    all_events = hook_events + social_overlay_events + events + reactions_events
     output_ass_path.write_text(header + "\n".join(all_events) + "\n", encoding="utf-8")
     logger.info(
-        "Wrote ASS subtitles: %s (%d events%s%s)",
+        "Wrote ASS subtitles: %s (%d events%s%s%s)",
         output_ass_path,
         len(all_events),
         ", hook title" if hook_events else "",
         ", social overlay" if social_overlay_events else "",
+        ", reactions" if reactions_events else "",
     )
     return True
 
@@ -3043,6 +3629,20 @@ def build_vertical_filter_plan(
     )
 
 
+def _run_encode_and_cap_size(
+    command: List[str], output_path: Path, out_w: int, out_h: int
+) -> Tuple[bool, int, int]:
+    """Run a final-pass ffmpeg encode command, then enforce the output size cap.
+
+    Shared by every branch of `render_reframed_clip_ffmpeg` so the size cap is
+    applied consistently regardless of which reframe path was taken.
+    """
+    ok = run_ffmpeg_command(command).returncode == 0
+    if ok:
+        enforce_size_cap(output_path)
+    return ok, out_w, out_h
+
+
 def render_reframed_clip_ffmpeg(
     input_path: Path,
     output_path: Path,
@@ -3054,7 +3654,8 @@ def render_reframed_clip_ffmpeg(
 
     Collapsing reframing + subtitle burn into a single encode avoids a whole
     generation of re-encode loss. The pass uses the high-quality profile, CFR
-    output and loudness-normalised audio.
+    output and loudness-normalised audio. The output is re-encoded down to
+    `enforce_size_cap`'s target if it comes out over the cap.
     """
     width, height = ffprobe_video_size(input_path)
     has_audio = ffprobe_has_audio(input_path)
@@ -3064,6 +3665,7 @@ def render_reframed_clip_ffmpeg(
         else None
     )
     audio_args = build_audio_output_args(has_audio)
+    use_gpu = get_config().gpu_acceleration_enabled
 
     if output_format == "original":
         out_w, out_h = round_to_even(width), round_to_even(height)
@@ -3073,12 +3675,12 @@ def render_reframed_clip_ffmpeg(
         command = [
             "ffmpeg", "-y", "-i", str(input_path),
             "-vf", f"{subs},setsar=1",
-            *build_final_video_encode_args(),
+            *build_final_video_encode_args(use_gpu=use_gpu),
             *audio_args,
             "-movflags", "+faststart",
             str(output_path),
         ]
-        return run_ffmpeg_command(command).returncode == 0, out_w, out_h
+        return _run_encode_and_cap_size(command, output_path, out_w, out_h)
 
     plan = (
         detect_speaker_reframe_plan(input_path, output_format)
@@ -3102,12 +3704,12 @@ def render_reframed_clip_ffmpeg(
             "ffmpeg", "-y", "-i", str(input_path),
             "-filter_complex", video_filter,
             "-map", "[v]", "-map", "0:a?",
-            *build_final_video_encode_args(),
+            *build_final_video_encode_args(use_gpu=use_gpu),
             *audio_args,
             "-movflags", "+faststart",
             str(output_path),
         ]
-        return run_ffmpeg_command(command).returncode == 0, 1080, 1920
+        return _run_encode_and_cap_size(command, output_path, 1080, 1920)
 
     if plan and plan["mode"] == "pan":
         video_filter = (
@@ -3119,12 +3721,12 @@ def render_reframed_clip_ffmpeg(
         command = [
             "ffmpeg", "-y", "-i", str(input_path),
             "-vf", video_filter,
-            *build_final_video_encode_args(),
+            *build_final_video_encode_args(use_gpu=use_gpu),
             *audio_args,
             "-movflags", "+faststart",
             str(output_path),
         ]
-        return run_ffmpeg_command(command).returncode == 0, 1080, 1920
+        return _run_encode_and_cap_size(command, output_path, 1080, 1920)
 
     # Default "vertical": scene-aware — tracked crop for face shots, blurred-
     # background full-frame fit for content shots (tweets/graphs/slides).
@@ -3140,24 +3742,24 @@ def render_reframed_clip_ffmpeg(
             "ffmpeg", "-y", "-i", str(input_path),
             "-filter_complex", graph,
             "-map", map_label, "-map", "0:a?",
-            *build_final_video_encode_args(),
+            *build_final_video_encode_args(use_gpu=use_gpu),
             *audio_args,
             "-movflags", "+faststart",
             str(output_path),
         ]
-        return run_ffmpeg_command(command).returncode == 0, 1080, 1920
+        return _run_encode_and_cap_size(command, output_path, 1080, 1920)
 
     if subs:
         video_filter = f"{video_filter},{subs}"
     command = [
         "ffmpeg", "-y", "-i", str(input_path),
         "-vf", video_filter,
-        *build_final_video_encode_args(),
+        *build_final_video_encode_args(use_gpu=use_gpu),
         *audio_args,
         "-movflags", "+faststart",
         str(output_path),
     ]
-    return run_ffmpeg_command(command).returncode == 0, 1080, 1920
+    return _run_encode_and_cap_size(command, output_path, 1080, 1920)
 
 
 def burn_ass_subtitles_ffmpeg(
@@ -3165,11 +3767,15 @@ def burn_ass_subtitles_ffmpeg(
     ass_path: Path,
     output_path: Path,
     fonts_dir: Optional[Path] = None,
+    target_lufs: float = -14.0,
 ) -> bool:
     subtitles_filter = f"subtitles=filename={ffmpeg_escape_filter_path(ass_path)}"
     if fonts_dir:
         subtitles_filter += f":fontsdir={ffmpeg_escape_filter_value(str(fonts_dir))}"
     video_filter = f"{subtitles_filter},setsar=1"
+
+    has_audio = ffprobe_has_audio(input_path)
+    audio_args = build_audio_output_args(has_audio, target_lufs=target_lufs)
 
     command = [
         "ffmpeg",
@@ -3186,15 +3792,15 @@ def burn_ass_subtitles_ffmpeg(
         "20",
         "-pix_fmt",
         "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
+        *audio_args,
         "-movflags",
         "+faststart",
         str(output_path),
     ]
-    return run_ffmpeg_command(command).returncode == 0
+    ok = run_ffmpeg_command(command).returncode == 0
+    if ok:
+        enforce_size_cap(output_path)
+    return ok
 
 
 def parse_timestamp_to_seconds(timestamp_str: str) -> float:
@@ -3579,6 +4185,25 @@ def _filler_span_changes_meaning(
     return False
 
 
+def _pause_gap_is_safe_to_cut(prev_word_text: str, gap_seconds: float) -> bool:
+    """Only cut an inter-word gap if it's at a sentence/phrase boundary, or
+    it's long enough that it's obviously dead air regardless of grammar.
+
+    Cutting on raw gap length alone (the old behavior) would remove ordinary
+    mid-sentence breathing gaps at high sensitivity since ASR word-timestamp
+    gaps and ordinary speech cadence overlap well below "obvious silence."
+    """
+    if gap_seconds >= _OBVIOUS_SILENCE_SECONDS:
+        return True
+    text = str(prev_word_text or "").rstrip()
+    return text.endswith((".", "!", "?", "…", ","))
+
+
+# A gap this long is safe to cut even mid-sentence — no continuous speech
+# pattern produces dead air this long, so grammar boundary checks are moot.
+_OBVIOUS_SILENCE_SECONDS = 1.2
+
+
 def build_clip_keep_ranges(
     video_path: Path,
     clip_start: float,
@@ -3614,7 +4239,9 @@ def build_clip_keep_ranges(
 
         for current, nxt in zip(relevant_words, relevant_words[1:]):
             gap = nxt["start"] - current["end"]
-            if gap >= pause_threshold_seconds:
+            if gap >= pause_threshold_seconds and _pause_gap_is_safe_to_cut(
+                current.get("text", ""), gap
+            ):
                 removal_intervals.append((current["end"], nxt["start"]))
 
         trailing_gap = clip_end - relevant_words[-1]["end"]
@@ -3748,6 +4375,7 @@ def create_optimized_clip(
     hook_title: Optional[str] = None,
     hook_style: Optional[Dict[str, Any]] = None,
     social_overlay: Optional[Dict[str, Any]] = None,
+    reactions: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size)."""
     try:
@@ -3828,8 +4456,9 @@ def create_optimized_clip(
             burn_ass_path: Optional[Path] = None
             fonts_dir: Optional[Path] = None
             social_overlay_enabled = bool(social_overlay and social_overlay.get("enabled"))
+            hook_image_overlays: List[Dict[str, Any]] = []
             if (
-                add_subtitles or hook_title or social_overlay_enabled
+                add_subtitles or hook_title or social_overlay_enabled or reactions
             ) and build_assemblyai_ass_subtitles(
                 video_path,
                 start_time,
@@ -3846,6 +4475,8 @@ def create_optimized_clip(
                 include_captions=add_subtitles,
                 hook_style=hook_style,
                 social_overlay=social_overlay,
+                reactions=reactions,
+                hook_image_overlays_out=hook_image_overlays,
             ):
                 burn_ass_path = ass_path
                 fonts_dir = ass_fonts_dir(
@@ -3863,6 +4494,57 @@ def create_optimized_clip(
                 raise RuntimeError("ffmpeg reframe render failed")
 
             shutil.move(str(final_clip_path), str(output_path))
+
+            if reactions:
+                from .emoji_reactions import (
+                    overlay_emoji_reactions_ffmpeg,
+                    split_reactions_by_asset_availability,
+                )
+
+                overlayable_reactions, _ = split_reactions_by_asset_availability(reactions)
+                if overlayable_reactions:
+                    reactions_out_path = temp_root / "with_reactions.mp4"
+                    try:
+                        overlay_ok = overlay_emoji_reactions_ffmpeg(
+                            output_path,
+                            reactions_out_path,
+                            overlayable_reactions,
+                            target_width,
+                            target_height,
+                        )
+                    except Exception:
+                        overlay_ok = False
+                        logger.exception(
+                            "Emoji reaction overlay pass raised for %s", output_path
+                        )
+                    if overlay_ok:
+                        shutil.move(str(reactions_out_path), str(output_path))
+                        enforce_size_cap(output_path)
+                    else:
+                        logger.warning(
+                            "Emoji reaction overlay pass failed for %s; clip kept without image-overlay reactions",
+                            output_path,
+                        )
+
+            if hook_image_overlays:
+                hook_emoji_out_path = temp_root / "with_hook_emoji.mp4"
+                try:
+                    hook_overlay_ok = overlay_image_overlays_ffmpeg(
+                        output_path, hook_emoji_out_path, hook_image_overlays
+                    )
+                except Exception:
+                    hook_overlay_ok = False
+                    logger.exception(
+                        "Hook emoji overlay pass raised for %s", output_path
+                    )
+                if hook_overlay_ok:
+                    shutil.move(str(hook_emoji_out_path), str(output_path))
+                    enforce_size_cap(output_path)
+                else:
+                    logger.warning(
+                        "Hook emoji overlay pass failed for %s; clip kept without hook emoji",
+                        output_path,
+                    )
 
             sfx_name = (hook_style or {}).get("hook_sfx") if hook_title else None
             sfx_path = find_sfx_path(sfx_name)
@@ -3964,6 +4646,7 @@ def create_clips_from_segments(
                 hook_title=segment.get("hook_title"),
                 hook_style=hook_style,
                 social_overlay=social_overlay,
+                reactions=segment.get("reactions"),
             )
 
             if success:
@@ -3987,6 +4670,7 @@ def create_clips_from_segments(
                     "shareability_score": segment.get("shareability_score", 0),
                     "hook_type": segment.get("hook_type"),
                     "hook_title": segment.get("hook_title"),
+                    "reactions": segment.get("reactions") or [],
                     "keep_ranges": keep_ranges,
                 }
                 clips_info.append(clip_info)
@@ -4038,6 +4722,36 @@ def find_sfx_path(name: Optional[str]) -> Optional[Path]:
     if path.suffix.lower() in SFX_EXTENSIONS and path.is_file():
         try:
             path.resolve().relative_to(SFX_DIR.resolve())
+        except ValueError:
+            return None
+        return path
+    return None
+
+
+MUSIC_DIR = Path(__file__).parent.parent / "music"
+MUSIC_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg")
+
+
+def get_available_music() -> List[str]:
+    """Get list of available background-music beds (user-supplied; ships
+    empty, same licensing rationale as SFX_DIR — see backend/music/README.md)."""
+    if not MUSIC_DIR.exists():
+        return []
+    return sorted(
+        str(p) for p in MUSIC_DIR.iterdir() if p.suffix.lower() in MUSIC_EXTENSIONS
+    )
+
+
+def find_music_path(name: Optional[str]) -> Optional[Path]:
+    """Resolve a user-chosen music-bed name to a real file inside MUSIC_DIR
+    (no traversal) — mirrors find_sfx_path."""
+    if not name:
+        return None
+    candidate = Path(name).name
+    path = MUSIC_DIR / candidate
+    if path.suffix.lower() in MUSIC_EXTENSIONS and path.is_file():
+        try:
+            path.resolve().relative_to(MUSIC_DIR.resolve())
         except ValueError:
             return None
         return path

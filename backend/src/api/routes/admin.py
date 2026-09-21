@@ -111,6 +111,73 @@ SETTING_METADATA = {
         "description": "Clip cap applied specifically to fast processing mode.",
         "input_type": "text",
     },
+    "GPU_ACCELERATION_ENABLED": {
+        "label": "GPU acceleration",
+        "description": "Use hardware-accelerated video encoding (NVENC) for rendering when available.",
+        "input_type": "select",
+        "options": ["true", "false"],
+    },
+    "AUTO_GENERATE_METADATA_ENABLED": {
+        "label": "Auto-generate metadata",
+        "description": "Automatically generate title/description/tags for every clip right after "
+        "clip detection finishes. When off, metadata is only generated via the manual "
+        "Regenerate buttons.",
+        "input_type": "select",
+        "options": ["true", "false"],
+    },
+    "RANKING_SFX_FILENAME": {
+        "label": "Ranking transition SFX",
+        "description": "Filename of the sound effect played at every cut in a ranking compilation. "
+        "Set by uploading a file in Settings -> Ranking; leave blank for silent transitions.",
+        "input_type": "text",
+    },
+    "RANKING_SFX_OFFSET_PCT": {
+        "label": "Ranking SFX offset (%)",
+        "description": "How far before each cut the transition SFX starts, as a percentage of the "
+        "SFX's own length.",
+        "input_type": "text",
+    },
+    "RANKING_DEFAULT_FRAMING": {
+        "label": "Ranking default framing",
+        "description": "How a ranking clip that isn't already 9:16 fills the frame by default "
+        "(overridable per clip).",
+        "input_type": "select",
+        "options": ["blur_fill", "crop_fill", "letterbox"],
+    },
+    "LLM_PROVIDER_MODE": {
+        "label": "Local LLM provider mode",
+        "description": "Ollama (local) is always tried first for content-policy/metadata features. "
+        "Gemini fallback is used only if Ollama is unavailable.",
+        "input_type": "select",
+        "options": ["ollama", "gemini", "hybrid"],
+    },
+    "OLLAMA_MODEL": {
+        "label": "Ollama model",
+        "description": "Model used for content-policy and metadata generation calls. "
+        "qwen2.5:7b-instruct gives noticeably better structured-output quality if it fits "
+        "in VRAM (~4.5GB at Q4); qwen2.5:3b-instruct/llama3.2:3b are lighter fallbacks.",
+        "input_type": "select",
+        "options": [
+            "qwen2.5:7b-instruct",
+            "qwen2.5:3b-instruct",
+            "llama3.2:3b",
+            "gemma2:2b",
+            "qwen2.5:3b",
+        ],
+    },
+    "GEMINI_MODEL": {
+        "label": "Gemini model",
+        "description": "Fallback model used when Ollama is unavailable and LLM_PROVIDER_MODE allows it. "
+        "Uses the same Google API key as the general LLM setting. Flash-lite variants are the "
+        "cheapest/fastest and are plenty for hook and metadata generation.",
+        "input_type": "select",
+        "options": [
+            "gemini-3.5-flash-lite",
+            "gemini-3-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3-flash-preview",
+        ],
+    },
 }
 
 
@@ -153,6 +220,16 @@ def _setting_status(
         elif source == "environment":
             current_value = env_value
 
+    disabled_reason: str | None = None
+    if setting_key == "GPU_ACCELERATION_ENABLED":
+        from ...video_utils import detect_gpu_encoder
+
+        if not detect_gpu_encoder():
+            disabled_reason = (
+                "No supported GPU encoder (NVENC) detected on this machine — "
+                "rendering will keep using CPU encoding regardless of this setting."
+            )
+
     return {
         "key": setting_key,
         "label": metadata["label"],
@@ -167,6 +244,7 @@ def _setting_status(
         "overridden_by_env": has_env and has_admin_value and not prefer_admin_value,
         "updated_at": row.get("updated_at"),
         "current_value": current_value,
+        "disabled_reason": disabled_reason,
     }
 
 
@@ -178,15 +256,83 @@ async def admin_health(
     return {"status": "ok"}
 
 
+
+# Every settings page load/save triggers this check, so it must fail fast
+# when Ollama isn't reachable rather than stalling the whole page — the
+# explicit "Test connection" button (test_ollama_connection below) is the
+# place for a more patient, user-initiated check.
+_BACKGROUND_OLLAMA_CHECK_TIMEOUT_SECONDS = 1.5
+
+
+async def _check_ollama_for_settings_page():
+    """One background Ollama probe per settings request, reused for both the
+    OLLAMA_MODEL live options and the llm_status indicator, so a page
+    load/save never pays for two separate (redundant) round trips."""
+    from ...ollama_status import check_ollama_status
+
+    config = get_config()
+    return await check_ollama_status(
+        config.resolve_ollama_base_url(), timeout=_BACKGROUND_OLLAMA_CHECK_TIMEOUT_SECONDS
+    )
+
+
+def _build_llm_status(ollama_status, config: Config) -> dict[str, bool]:
+    return {
+        "ollama_connected": ollama_status.reachable,
+        "gemini_key_set": bool(config.google_api_key),
+    }
+
+
+def _settings_with_live_ollama_models(
+    rows: dict[str, dict[str, object]], ollama_status
+) -> list[dict]:
+    """Same as [_setting_status(k, rows) for k in RUNTIME_SETTING_KEYS], except
+    OLLAMA_MODEL's `options` are refreshed from the live daemon (installed
+    models) when reachable, instead of the static recommended-models list."""
+    settings = [_setting_status(setting_key, rows) for setting_key in RUNTIME_SETTING_KEYS]
+    if ollama_status.reachable and ollama_status.models:
+        for setting in settings:
+            if setting["key"] == "OLLAMA_MODEL":
+                setting["options"] = ollama_status.models
+    return settings
+
+
 @router.get("/runtime-settings")
 async def get_runtime_settings(request: Request, db: AsyncSession = Depends(get_db)):
-    await require_admin_user(request, db, get_config())
+    config = get_config()
+    await require_admin_user(request, db, config)
     rows = await get_runtime_setting_rows(db)
+    ollama_status = await _check_ollama_for_settings_page()
     return {
-        "settings": [
-            _setting_status(setting_key, rows) for setting_key in RUNTIME_SETTING_KEYS
-        ]
+        "settings": _settings_with_live_ollama_models(rows, ollama_status),
+        "llm_status": _build_llm_status(ollama_status, config),
     }
+
+
+@router.post("/test-ollama-connection")
+async def test_ollama_connection(request: Request, db: AsyncSession = Depends(get_db)):
+    await require_admin_user(request, db, get_config())
+    from ...ollama_status import check_ollama_status
+
+    status = await check_ollama_status(get_config().resolve_ollama_base_url())
+    return status.model_dump()
+
+
+@router.post("/test-gemini-connection")
+async def test_gemini_connection(request: Request, db: AsyncSession = Depends(get_db)):
+    await require_admin_user(request, db, get_config())
+    config = get_config()
+    if not config.google_api_key:
+        return {"ok": False, "error": "GOOGLE_API_KEY is not set"}
+
+    from pydantic_ai import Agent
+
+    try:
+        agent = Agent[None, str](model=f"google-gla:{config.gemini_model}")
+        result = await agent.run('Respond with exactly the word "ok".')
+        return {"ok": True, "response": result.output}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @router.patch("/runtime-settings")
@@ -275,8 +421,8 @@ async def update_runtime_settings(
     await load_runtime_settings_cache(db)
 
     rows = await get_runtime_setting_rows(db)
+    ollama_status = await _check_ollama_for_settings_page()
     return {
-        "settings": [
-            _setting_status(setting_key, rows) for setting_key in RUNTIME_SETTING_KEYS
-        ]
+        "settings": _settings_with_live_ollama_models(rows, ollama_status),
+        "llm_status": _build_llm_status(ollama_status, get_config()),
     }

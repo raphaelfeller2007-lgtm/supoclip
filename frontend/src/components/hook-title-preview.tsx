@@ -1,6 +1,7 @@
 "use client";
 
 import type { HookStyle } from "@/lib/hook-style";
+import { splitHookIntoHighlightSpans } from "@/lib/hook-highlight";
 
 type TemplateSummary = {
   id: string;
@@ -20,6 +21,7 @@ export function HookTitlePreview({
   captionTemplate,
   availableTemplates,
   overrideText,
+  highlightWords,
   compact,
 }: {
   style: HookStyle;
@@ -27,6 +29,8 @@ export function HookTitlePreview({
   availableTemplates: TemplateSummary[];
   /** Show this hook text instead of the sample copy (used by the hook comparison UI). */
   overrideText?: string;
+  /** User-requested highlight keywords (same field the burned-in render honors). */
+  highlightWords?: string[];
   /** Smaller preview box, for use inside per-variant comparison cards. */
   compact?: boolean;
 }) {
@@ -66,9 +70,9 @@ export function HookTitlePreview({
 
   return (
     <div className="space-y-1.5">
-      {!compact && <label className="text-xs text-stone-500">Preview (approximate)</label>}
+      {!compact && <label className="text-xs text-muted-foreground">Preview (approximate)</label>}
       <div
-        className={`relative w-full aspect-[9/16] rounded-lg bg-stone-900 overflow-hidden flex ${
+        className={`relative w-full aspect-[9/16] bg-foreground overflow-hidden flex ${
           compact ? "max-h-40" : "max-h-56"
         }`}
         style={{
@@ -95,7 +99,7 @@ export function HookTitlePreview({
         `}</style>
         <span
           key={animationKey}
-          className="text-center font-bold leading-tight rounded-[3px]"
+          className="text-center font-bold leading-tight"
           style={{
             fontFamily,
             color: fontColor,
@@ -107,13 +111,15 @@ export function HookTitlePreview({
             ...animationStyle,
           }}
         >
-          {overrideText ? (
-            overrideText
-          ) : (
-            <>
-              This <span style={{ color: highlightColor }}>Changes</span> Everything
-            </>
-          )}
+          {splitHookIntoHighlightSpans(
+            overrideText || "This Changes Everything",
+            highlightWords
+          ).map((span, index) => (
+            <span key={index} style={span.highlighted ? { color: highlightColor } : undefined}>
+              {index > 0 ? " " : ""}
+              {span.text}
+            </span>
+          ))}
         </span>
       </div>
     </div>

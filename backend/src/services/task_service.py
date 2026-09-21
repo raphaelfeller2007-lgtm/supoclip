@@ -20,6 +20,8 @@ from ..repositories.clip_repository import ClipRepository
 from ..repositories.cache_repository import CacheRepository
 from .video_service import VideoService
 from .billing_service import BillingService
+from .content_policy_service import ContentPolicyService
+from .metadata_service import MetadataService
 from .task_completion_email_service import (
     TaskCompletionEmailService,
     TaskCompletionRecipient,
@@ -257,6 +259,12 @@ class TaskService:
                 progress_message="Starting...",
             )
 
+            # Tracks the last real progress percentage reached, so an error
+            # or cancellation can freeze the bar there instead of snapping
+            # to 0 — 0 reads as "nothing happened" even when the pipeline
+            # failed 90% of the way through.
+            last_progress = 0
+
             # Progress callback wrapper
             async def update_progress(
                 progress: int,
@@ -264,6 +272,8 @@ class TaskService:
                 status: str = "processing",
                 stage: Optional[str] = None,
             ):
+                nonlocal last_progress
+                last_progress = progress
                 await self.task_repo.update_task_status(
                     self.db,
                     task_id,
@@ -430,6 +440,50 @@ class TaskService:
                 perf_counter() - render_start, 3
             )
 
+            # Content policy scan: regex always, optional Ollama borderline
+            # check if the project opted in — one call per video, per spec.
+            # Runs after all clips exist so it can persist flags per real
+            # clip_id rather than re-deriving them from segments.
+            await update_progress(97, "Checking content policy...", stage="policy_check")
+            try:
+                clips_for_scan = await self.clip_repo.get_clips_by_task(self.db, task_id)
+                if user_id and clips_for_scan:
+                    await ContentPolicyService(self.db).scan_video(
+                        user_id, task_id, clips_for_scan
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Content policy scan failed for task %s: %s", task_id, exc
+                )
+
+            # Metadata generation: one LLM call for the whole video, per spec.
+            # generate_metadata_for_video (via run_with_llm_fallback) already
+            # acquires the shared "llm"/"gpu" resource slots, so this never
+            # overlaps a render job on the same GPU.
+            await update_progress(98, "Generating clip metadata...", stage="metadata")
+            try:
+                clips_for_metadata = (
+                    await self.clip_repo.get_clips_by_task(self.db, task_id)
+                    if self.config.auto_generate_metadata_enabled
+                    else []
+                )
+                if clips_for_metadata:
+                    task_record = await self.task_repo.get_task_by_id(self.db, task_id)
+                    video_title = (
+                        (task_record or {}).get("source_title")
+                        or (task_record or {}).get("source_url")
+                    )
+                    await MetadataService(self.db).regenerate_project_metadata(
+                        task_id,
+                        clips_for_metadata,
+                        video_title=video_title,
+                        allow_gemini=self.config.llm_provider_mode in ("gemini", "hybrid"),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Metadata generation failed for task %s: %s", task_id, exc
+                )
+
             # Mark as completed
             await self.task_repo.update_task_status(
                 self.db,
@@ -476,17 +530,17 @@ class TaskService:
                     self.db,
                     task_id,
                     "cancelled",
-                    progress=0,
+                    progress=last_progress,
                     progress_message="Cancelled by user",
                 )
                 if progress_callback:
-                    await progress_callback(0, "Cancelled by user", "cancelled")
+                    await progress_callback(last_progress, "Cancelled by user", "cancelled")
                 raise
             await self.task_repo.update_task_status(
-                self.db, task_id, "error", progress=0, progress_message=str(e)
+                self.db, task_id, "error", progress=last_progress, progress_message=str(e)
             )
             if progress_callback:
-                await progress_callback(0, str(e), "error")
+                await progress_callback(last_progress, str(e), "error")
             error_code = "task_error"
             message = str(e).lower()
             if "download" in message or "youtube" in message:
@@ -626,15 +680,45 @@ class TaskService:
         """Get all tasks for a user."""
         return await self.task_repo.get_user_tasks(self.db, user_id, limit)
 
+    async def get_task_status_counts(self, user_id: str) -> Dict[str, int]:
+        """Status -> count for a user's non-deleted tasks."""
+        return await self.task_repo.get_status_counts(self.db, user_id)
+
     async def delete_task(self, task_id: str) -> None:
-        """Delete a task and all its associated clips."""
-        # Delete all clips for this task
-        await self.clip_repo.delete_clips_by_task(self.db, task_id)
-
-        # Delete the task
+        """Soft-delete a task (moves it to trash). Clips stay associated with
+        the task — they are not touched until the task is purged."""
         await self.task_repo.delete_task(self.db, task_id)
+        logger.info(f"Moved task {task_id} to trash")
 
-        logger.info(f"Deleted task {task_id} and all associated clips")
+    async def restore_task(self, task_id: str) -> bool:
+        """Restore a task out of trash. Returns True if it was restored."""
+        return await self.task_repo.restore_task(self.db, task_id)
+
+    async def list_trash(self, user_id: str, limit: int = 50) -> list[Dict[str, Any]]:
+        """List a user's soft-deleted tasks."""
+        return await self.task_repo.list_deleted_tasks(self.db, user_id, limit)
+
+    async def purge_task(self, task_id: str) -> None:
+        """Permanently delete a trashed task: best-effort removes each clip's
+        on-disk file, deletes the clip rows, then hard-deletes the task row.
+
+        Source videos under `sources` are never touched by this flow.
+        """
+        clips = await self.clip_repo.get_clips_by_task(self.db, task_id)
+        for clip in clips:
+            file_path = clip.get("file_path")
+            if not file_path:
+                continue
+            try:
+                path = Path(file_path)
+                if path.exists():
+                    path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to remove clip file {file_path} while purging task {task_id}: {e}")
+
+        await self.clip_repo.delete_clips_by_task(self.db, task_id)
+        await self.task_repo.purge_task(self.db, task_id)
+        logger.info(f"Purged task {task_id} and its clip files")
 
     async def update_task_settings(
         self,
@@ -960,6 +1044,110 @@ class TaskService:
         )
         return (await self.clip_repo.get_clip_by_id(self.db, clip_id)) or {}
 
+    async def update_clip_reactions(
+        self,
+        task_id: str,
+        clip_id: str,
+        reactions: list[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Replace a clip's emoji reactions and re-render its burned-in frame.
+
+        Reactions are burned into the same frame as the hook title/crop/
+        captions (see `emoji_reactions.build_emoji_reactions_ass`), so — like
+        `select_hook_variant` — this re-renders the clip from the original
+        source rather than trying to patch the already-encoded file.
+        """
+        clip = await self.clip_repo.get_clip_by_id(self.db, clip_id)
+        if not clip or clip["task_id"] != task_id:
+            raise ValueError("Clip not found")
+
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+        if not task:
+            raise ValueError("Task not found")
+
+        source_url = task.get("source_url")
+        source_type = task.get("source_type")
+        if not source_url or not source_type:
+            raise ValueError("Task source URL is missing; cannot re-render reactions")
+
+        metadata = await self._load_task_source_settings(task_id)
+        output_format = metadata.get("output_format", "vertical")
+        add_subtitles = metadata.get("add_subtitles", True)
+        hook_style = metadata.get("hook_style")
+        social_overlay = metadata.get("social_overlay")
+        cleanup_settings = normalize_clip_cleanup_settings(
+            metadata.get("cut_long_pauses"),
+            metadata.get("pause_threshold_ms"),
+            metadata.get("remove_filler_words"),
+            metadata.get("filtered_words"),
+        )
+
+        if source_type == "youtube":
+            downloaded = await self.video_service.download_video(source_url)
+            if not downloaded:
+                raise ValueError("Failed to download source video to re-render reactions")
+            video_path = Path(downloaded)
+        else:
+            video_path = self.video_service.resolve_local_video_path(source_url)
+            if not video_path.exists():
+                raise ValueError("Source video file no longer exists")
+
+        source_ranges = self._get_clip_source_ranges(clip)
+        bounds = source_range_bounds(source_ranges)
+        if bounds:
+            start_time = self._seconds_to_mmss(bounds[0])
+            end_time = self._seconds_to_mmss(bounds[1])
+        else:
+            start_time = clip["start_time"]
+            end_time = clip["end_time"]
+
+        segment = {
+            "start_time": start_time,
+            "end_time": end_time,
+            "keep_ranges": source_ranges,
+            "text": clip.get("text") or "",
+            "relevance_score": clip.get("relevance_score", 0.5),
+            "reasoning": clip.get("reasoning") or "Emoji reactions applied",
+            "virality_score": clip.get("virality_score", 0),
+            "hook_score": clip.get("hook_score", 0),
+            "engagement_score": clip.get("engagement_score", 0),
+            "value_score": clip.get("value_score", 0),
+            "shareability_score": clip.get("shareability_score", 0),
+            "hook_type": clip.get("hook_type"),
+            "hook_title": clip.get("hook_title"),
+            "reactions": reactions,
+        }
+
+        clips_info = await self.video_service.create_video_clips(
+            video_path,
+            [segment],
+            task.get("font_family"),
+            task.get("font_size"),
+            task.get("font_color"),
+            task.get("caption_template") or "default",
+            output_format,
+            add_subtitles,
+            cleanup_settings,
+            hook_style,
+            social_overlay,
+        )
+        if not clips_info:
+            raise ValueError("Failed to re-render clip with new reactions")
+        clip_info = clips_info[0]
+
+        await self.clip_repo.update_clip(
+            self.db,
+            clip_id,
+            clip_info["filename"],
+            clip_info["path"],
+            clip_info.get("start_time", start_time),
+            clip_info.get("end_time", end_time),
+            clip_info.get("duration", clip["duration"]),
+            clip_info.get("text") or clip.get("text") or "",
+        )
+        await self.clip_repo.update_clip_reactions(self.db, clip_id, reactions)
+        return (await self.clip_repo.get_clip_by_id(self.db, clip_id)) or {}
+
     async def trim_clip(
         self,
         task_id: str,
@@ -1121,6 +1309,7 @@ class TaskService:
         caption_text: str,
         position: str,
         highlight_words: list[str],
+        font_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         clip = await self.clip_repo.get_clip_by_id(self.db, clip_id)
         if not clip or clip["task_id"] != task_id:
@@ -1156,6 +1345,11 @@ class TaskService:
                 except ValueError:
                     transcript_video_path = None
 
+        if font_size is not None:
+            # Persist per-project so future clip regenerations (and the
+            # settings page) reflect the size chosen in the editor.
+            await self.task_repo.update_task_font_size(self.db, task_id, font_size)
+
         output_path = overlay_custom_captions(
             input_path,
             Path(self.config.temp_dir) / "clips",
@@ -1163,7 +1357,7 @@ class TaskService:
             position,
             highlight_words,
             font_family=task.get("font_family") or None,
-            font_size=task.get("font_size") or None,
+            font_size=font_size or task.get("font_size") or None,
             font_color=task.get("font_color") or None,
             caption_template=task.get("caption_template") or "default",
             transcript_video_path=transcript_video_path,

@@ -22,6 +22,10 @@ export type RuntimeSetting = {
   updated_at?: string | null;
   /** Live effective value. Always null for password-type settings. */
   current_value?: string | null;
+  /** When set, this setting can't actually take effect right now (e.g. no
+   * GPU detected) — the field is shown disabled with this explanation
+   * rather than silently accepting a value that won't do anything. */
+  disabled_reason?: string | null;
 };
 
 type RuntimeSettingsFormProps = {
@@ -31,7 +35,7 @@ type RuntimeSettingsFormProps = {
 
 function sourceBadge(setting: RuntimeSetting) {
   if (setting.source === "environment") {
-    return <Badge className="bg-black text-white">Environment</Badge>;
+    return <Badge className="bg-foreground text-background">Environment</Badge>;
   }
   if (setting.source === "admin") {
     return <Badge className="bg-blue-100 text-blue-800">Admin setting</Badge>;
@@ -135,7 +139,7 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
 
   return (
     <form onSubmit={handleSubmit}>
-      <div className="divide-y divide-gray-200">
+      <div className="divide-y divide-border">
         {settings.map((setting) => (
           <div
             key={setting.key}
@@ -143,18 +147,18 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
           >
             <div>
               <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-black">{setting.label}</p>
+                <p className="text-sm font-medium text-foreground">{setting.label}</p>
                 {sourceBadge(setting)}
               </div>
-              <p className="mt-1 text-xs font-mono text-gray-500">{setting.key}</p>
+              <p className="mt-1 text-xs font-mono text-muted-foreground">{setting.key}</p>
               {setting.input_type === "password" ? (
                 setting.configured && (
-                  <p className="mt-1 text-xs text-gray-600">Currently set (value hidden)</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Currently set (value hidden)</p>
                 )
               ) : (
-                <p className="mt-1 text-xs text-gray-600">
+                <p className="mt-1 text-xs text-muted-foreground">
                   Current value:{" "}
-                  <span className="font-mono font-medium text-black">
+                  <span className="font-mono font-medium text-foreground">
                     {setting.current_value && setting.current_value.length > 0
                       ? setting.current_value
                       : "(not set)"}
@@ -165,27 +169,33 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
 
             <div>
               {setting.input_type === "select" ? (
-                <select
-                  value={values[setting.key] ?? ""}
-                  onChange={(event) =>
-                    setValues((current) => ({
-                      ...current,
-                      [setting.key]: event.target.value,
-                    }))
-                  }
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-black outline-none focus:border-black"
-                >
-                  <option value="">
-                    {setting.configured
-                      ? `Keep current (${setting.current_value ?? "configured"})`
-                      : "Select a value"}
-                  </option>
-                  {(setting.options ?? []).map((option) => (
-                    <option key={option} value={option}>
-                      {option}
+                <>
+                  <select
+                    value={values[setting.key] ?? ""}
+                    disabled={!!setting.disabled_reason}
+                    onChange={(event) =>
+                      setValues((current) => ({
+                        ...current,
+                        [setting.key]: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-md border border-border px-3 py-2 text-sm text-foreground outline-none focus:border-ring disabled:cursor-not-allowed disabled:bg-background disabled:text-muted-foreground"
+                  >
+                    <option value="">
+                      {setting.configured
+                        ? `Keep current (${setting.current_value ?? "configured"})`
+                        : "Select a value"}
                     </option>
-                  ))}
-                </select>
+                    {(setting.options ?? []).map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                  {setting.disabled_reason && (
+                    <p className="mt-1 text-xs text-foreground font-bold">{setting.disabled_reason}</p>
+                  )}
+                </>
               ) : (
                 <input
                   type={setting.input_type}
@@ -205,19 +215,19 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
                         ? `Keep current (${setting.current_value ?? "configured"})`
                         : "Add value"
                   }
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-black outline-none focus:border-black"
+                  className="w-full rounded-md border border-border px-3 py-2 text-sm text-foreground outline-none focus:border-ring"
                   autoComplete="off"
                 />
               )}
-              <p className="mt-1 text-xs text-gray-600">{setting.description}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{setting.description}</p>
               {setting.overridden_by_env && (
-                <p className="mt-1 text-xs text-amber-700">
+                <p className="mt-1 text-xs text-foreground font-bold">
                   The saved admin value is present but ignored while the env var is set.
                 </p>
               )}
             </div>
 
-            <label className="flex items-center gap-2 text-sm text-gray-700 lg:justify-end">
+            <label className="flex items-center gap-2 text-sm text-foreground lg:justify-end">
               <input
                 type="checkbox"
                 checked={
@@ -230,12 +240,12 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
                     [setting.key]: event.target.checked,
                   }))
                 }
-                className="h-4 w-4 rounded border-gray-300"
+                className="h-4 w-4 rounded border-border"
               />
               Prefer saved
             </label>
 
-            <label className="flex items-center gap-2 text-sm text-gray-700 lg:justify-end">
+            <label className="flex items-center gap-2 text-sm text-foreground lg:justify-end">
               <input
                 type="checkbox"
                 checked={Boolean(deleteKeys[setting.key])}
@@ -246,7 +256,7 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
                     [setting.key]: event.target.checked,
                   }))
                 }
-                className="h-4 w-4 rounded border-gray-300"
+                className="h-4 w-4 rounded border-border"
               />
               <Trash2 className="h-4 w-4" aria-hidden="true" />
               Clear saved
@@ -255,11 +265,11 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-4 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-4">
         <div className="text-sm">
           {error && <p className="text-red-700">{error}</p>}
         </div>
-        <p className="text-sm text-gray-500" aria-live="polite">
+        <p className="text-sm text-muted-foreground" aria-live="polite">
           {isPending || isSaving
             ? "Saving…"
             : hasChanges

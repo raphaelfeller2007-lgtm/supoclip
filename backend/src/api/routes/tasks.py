@@ -2,7 +2,7 @@
 Task API routes using refactored architecture.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -354,10 +354,17 @@ def _build_public_task(task: Dict[str, Any], share_token: str) -> Dict[str, Any]
 
 @router.get("/")
 async def list_tasks(
-    request: Request, db: AsyncSession = Depends(get_db), limit: int = 50
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(50, ge=1, le=500),
 ):
     """
     Get all tasks for the authenticated user.
+
+    Default limit stays 50 for callers that don't ask for more, but the
+    /list page's "select all" needs to actually see everything selectable —
+    it explicitly requests the max (500) so select-all-and-delete can't
+    silently miss tasks past whatever the default page size happens to be.
     """
     user_id = await _get_user_id_from_headers(request, db)
 
@@ -370,6 +377,42 @@ async def list_tasks(
     except Exception as e:
         logger.error(f"Error retrieving user tasks: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving tasks: {str(e)}")
+
+
+@router.get("/system-status")
+async def get_system_status(request: Request, db: AsyncSession = Depends(get_db)):
+    """Compact operator-panel status for the home screen's status strip:
+    queue depth / active jobs (from this user's own tasks — there's no
+    separate multi-tenant queue to inspect in the local-first model), GPU
+    encoder availability, and disk space on TEMP_DIR (where clips render
+    to before they're served)."""
+    import shutil
+
+    from ...video_utils import detect_gpu_encoder
+
+    user_id = await _get_user_id_from_headers(request, db)
+    config = get_config()
+
+    task_service = TaskService(db)
+    counts = await task_service.get_task_status_counts(user_id)
+    queue_depth = counts.get("queued", 0)
+    processing_count = counts.get("processing", 0)
+    active_jobs = queue_depth + processing_count
+
+    try:
+        disk_total, _, disk_free = shutil.disk_usage(config.temp_dir)
+    except OSError:
+        disk_total, disk_free = 0, 0
+
+    return {
+        "queue_depth": queue_depth,
+        "processing_count": processing_count,
+        "active_jobs": active_jobs,
+        "gpu_enabled": config.gpu_acceleration_enabled,
+        "gpu_available": detect_gpu_encoder() is not None,
+        "disk_free_bytes": disk_free,
+        "disk_total_bytes": disk_total,
+    }
 
 
 @router.post("/")
@@ -575,6 +618,27 @@ async def get_shared_clip_file(
     )
 
 
+@router.get("/trash")
+async def list_trash(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """List the authenticated user's soft-deleted (trashed) tasks.
+
+    Registered before `GET /{task_id}` so the literal "trash" path segment
+    isn't swallowed by that param route.
+    """
+    user_id = await _get_user_id_from_headers(request, db)
+    try:
+        task_service = TaskService(db)
+        tasks = await task_service.list_trash(user_id, limit)
+        return {"tasks": tasks, "total": len(tasks)}
+    except Exception as e:
+        logger.error(f"Error retrieving trashed tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving trashed tasks: {str(e)}")
+
+
 @router.get("/{task_id}")
 async def get_task(
     task_id: str, request: Request, db: AsyncSession = Depends(get_db)
@@ -678,24 +742,6 @@ async def get_task_progress_sse(task_id: str, request: Request):
 
     async def event_generator():
         """Generate SSE events for task progress."""
-        # Send initial task status
-        yield {
-            "event": "status",
-            "data": json.dumps(
-                {
-                    "task_id": task_id,
-                    "status": task.get("status"),
-                    "progress": task.get("progress", 0),
-                    "message": task.get("progress_message", ""),
-                }
-            ),
-        }
-
-        # If task is already completed, error, or cancelled, close connection
-        if task.get("status") in ["completed", "error", "cancelled"]:
-            yield {"event": "close", "data": json.dumps({"status": task.get("status")})}
-            return
-
         # Connect to Redis for real-time updates
         runtime_config = get_config()
         redis_client = redis.Redis(
@@ -704,6 +750,29 @@ async def get_task_progress_sse(task_id: str, request: Request):
             password=runtime_config.redis_password,
             decode_responses=True,
         )
+
+        # Prefer the last Redis progress snapshot (carries `stage`) over the
+        # DB row, which doesn't persist stage — falls back to the DB values
+        # if Redis has nothing cached yet (e.g. right after enqueue).
+        cached_progress = await ProgressTracker(redis_client, task_id).get()
+        yield {
+            "event": "status",
+            "data": json.dumps(
+                {
+                    "task_id": task_id,
+                    "status": task.get("status"),
+                    "progress": (cached_progress or {}).get("progress", task.get("progress", 0)),
+                    "message": (cached_progress or {}).get("message", task.get("progress_message", "")),
+                    "stage": (cached_progress or {}).get("stage"),
+                }
+            ),
+        }
+
+        # If task is already completed, error, or cancelled, close connection
+        if task.get("status") in ["completed", "error", "cancelled"]:
+            await redis_client.close()
+            yield {"event": "close", "data": json.dumps({"status": task.get("status")})}
+            return
 
         try:
             # Subscribe to progress updates
@@ -743,6 +812,12 @@ async def update_task(
 
         task = await _require_task_owner(request, task_service, db, task_id)
 
+        if not task.get("source_id"):
+            raise HTTPException(
+                status_code=400,
+                detail="This task has no source to rename (e.g. a ranking project)",
+            )
+
         # Update source title
         await task_service.source_repo.update_source_title(db, task["source_id"], title)
 
@@ -774,16 +849,74 @@ async def delete_task(
                 status_code=403, detail="Not authorized to delete this task"
             )
 
-        # Delete clips and task
+        # Soft-delete: moves the task to trash, clips stay attached
         await task_service.delete_task(task_id)
 
-        return {"message": "Task deleted successfully"}
+        return {"message": "Task moved to trash"}
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting task: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting task: {str(e)}")
+
+
+@router.post("/{task_id}/restore")
+async def restore_task(
+    task_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Restore a task out of trash."""
+    try:
+        user_id = await _get_user_id_from_headers(request, db)
+        task_service = TaskService(db)
+
+        task = await task_service.task_repo.get_task_by_id(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_id"] != user_id:
+            raise HTTPException(
+                status_code=403, detail="Not authorized to restore this task"
+            )
+
+        restored = await task_service.restore_task(task_id)
+        if not restored:
+            raise HTTPException(status_code=400, detail="Task is not in trash")
+
+        return {"message": "Task restored successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error restoring task: {e}")
+        raise HTTPException(status_code=500, detail=f"Error restoring task: {str(e)}")
+
+
+@router.delete("/{task_id}/purge")
+async def purge_task(
+    task_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Permanently delete a trashed task and its clip files. Cannot be undone."""
+    try:
+        user_id = await _get_user_id_from_headers(request, db)
+        task_service = TaskService(db)
+
+        task = await task_service.task_repo.get_task_by_id(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_id"] != user_id:
+            raise HTTPException(
+                status_code=403, detail="Not authorized to purge this task"
+            )
+
+        await task_service.purge_task(task_id)
+
+        return {"message": "Task permanently deleted"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error purging task: {e}")
+        raise HTTPException(status_code=500, detail=f"Error purging task: {str(e)}")
 
 
 @router.delete("/{task_id}/clips/{clip_id}")
@@ -950,6 +1083,11 @@ async def update_clip_captions(
             raise HTTPException(
                 status_code=400, detail="highlight_words must be an array"
             )
+        font_size = (
+            _normalize_font_size(payload.get("font_size"))
+            if "font_size" in payload
+            else None
+        )
 
         task_service = TaskService(db)
         await _require_task_owner(request, task_service, db, task_id)
@@ -959,6 +1097,7 @@ async def update_clip_captions(
             caption_text,
             position,
             [str(word) for word in highlight_words],
+            font_size,
         )
         return {"clip": updated_clip}
     except ValueError as e:
@@ -1041,6 +1180,85 @@ async def select_clip_hook_variant(
         logger.error(f"Error selecting hook variant: {e}")
         raise HTTPException(
             status_code=500, detail=f"Error selecting hook variant: {str(e)}"
+        )
+
+
+@router.patch("/{task_id}/clips/{clip_id}/reactions")
+async def update_clip_reactions(
+    task_id: str, clip_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Replace a clip's emoji reactions and re-render it with them burned in."""
+    try:
+        payload = await request.json()
+        reactions = payload.get("reactions")
+        if not isinstance(reactions, list):
+            raise HTTPException(status_code=400, detail="reactions must be an array")
+
+        from ...emoji_reactions import REACTION_ANIMATIONS
+
+        normalized: list[Dict[str, Any]] = []
+        for index, item in enumerate(reactions):
+            if not isinstance(item, dict):
+                raise HTTPException(
+                    status_code=400, detail=f"reactions[{index}] must be an object"
+                )
+            emoji = str(item.get("emoji") or "").strip()
+            if not emoji:
+                raise HTTPException(
+                    status_code=400, detail=f"reactions[{index}].emoji is required"
+                )
+            animation_style = str(item.get("animation_style") or "fade_pop").strip().lower()
+            if animation_style not in REACTION_ANIMATIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"reactions[{index}].animation_style must be one of: {', '.join(REACTION_ANIMATIONS)}",
+                )
+            try:
+                timestamp_seconds = max(0.0, float(item.get("timestamp_seconds", 0)))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400, detail=f"reactions[{index}].timestamp_seconds must be a number"
+                )
+            try:
+                duration_seconds = float(item.get("duration_seconds", 1.6))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400, detail=f"reactions[{index}].duration_seconds must be a number"
+                )
+            duration_seconds = max(0.2, duration_seconds)
+
+            raw_position = item.get("position") or {}
+            try:
+                x_pct = min(max(float(raw_position.get("x_pct", 0.5)), 0.0), 1.0)
+                y_pct = min(max(float(raw_position.get("y_pct", 0.3)), 0.0), 1.0)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400, detail=f"reactions[{index}].position must have numeric x_pct/y_pct"
+                )
+
+            normalized.append(
+                {
+                    "id": str(item.get("id") or secrets.token_hex(6)),
+                    "emoji": emoji,
+                    "timestamp_seconds": timestamp_seconds,
+                    "animation_style": animation_style,
+                    "duration_seconds": duration_seconds,
+                    "position": {"x_pct": x_pct, "y_pct": y_pct},
+                }
+            )
+
+        task_service = TaskService(db)
+        await _require_task_owner(request, task_service, db, task_id)
+        updated_clip = await task_service.update_clip_reactions(task_id, clip_id, normalized)
+        return {"clip": updated_clip}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating clip reactions: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error updating clip reactions: {str(e)}"
         )
 
 

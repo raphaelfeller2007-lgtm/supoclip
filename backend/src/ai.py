@@ -3,11 +3,12 @@ AI-related functions for transcript analysis with enhanced precision and viralit
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, TypeVar
 import asyncio
 import logging
 import re
 
+import httpx
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from pydantic_ai.models.ollama import OllamaModel
@@ -15,7 +16,9 @@ from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 from .config import Config, get_config
+from .retry_backoff import is_rate_limit_error, with_exponential_backoff
 from .runtime_settings import apply_settings_to_process_env
+from .workers.resource_locks import resource_slot
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +26,37 @@ IDEAL_CLIP_MIN_SECONDS = 25
 IDEAL_CLIP_MAX_SECONDS = 50
 MIN_ACCEPTED_CLIP_SECONDS = 15
 MAX_ACCEPTED_CLIP_SECONDS = 60
-TRANSCRIPT_ANALYSIS_CACHE_VERSION = "hook-titles-v5-grounded"
+TRANSCRIPT_ANALYSIS_CACHE_VERSION = "hook-titles-v6-audience-first-hook"
 HOOK_TITLE_MAX_CHARS = 64
 HOOK_TITLE_MAX_WORDS = 10
+
+# The on-screen text hook shown at the start of every clip. Shared verbatim by
+# both hook-generation call sites — the per-segment "hook_title" produced as
+# part of the (cached) transcript analysis below, and the standalone
+# generate_hook_title_variants() used by the "Regenerate Hook" / "Compare
+# Hooks" UI. Keep this the single source of truth for hook-writing rules.
+HOOK_GENERATION_RULES = """Write ONLY the short on-screen text hook shown at the very start of the clip — never captions, descriptions, titles, hashtags, analysis, or CTAs. Base it only on the clip's own content; never invent facts, stats, or context, and never exaggerate.
+
+GOAL: the viewer instantly understands what the clip is about AND wants to see what happens / hear the answer / find out more. Create CLEAR curiosity, not vague mystery — the topic itself must be instantly understandable.
+
+STYLE: usually 4-10 words, instantly understandable to a first-time viewer, focused on the single strongest angle, curiosity-driven without being misleading, audience-relevant, readable in ~1-2 seconds. Structure: CLEAR TOPIC -> WHY IT MATTERS -> OPEN LOOP. Do not explain the whole video, and do not hide the topic just for mystery's sake.
+
+MATCH THE CONTENT'S ANGLE (don't force a formula if another structure is stronger):
+- Ranking: "Ranking [topic] [curiosity/emotion]"
+- Funny clip: "[Person/topic] + [funny angle] 😂"
+- Educational: "Why [problem/topic] [curiosity]"
+- Opinion/debate: "The Truth About [topic] 👀"
+- Surprising moment: "Why [moment/topic] Was So Unexpected 😳"
+- Question/explanation: "Why [topic/problem] Happens 🤔"
+- List: "[Number] [topic] You Need to See 👀"
+
+AUDIENCE-FIRST VOICE: prefer you / your / you're / why you / why your / what you're missing / if you're / before you — the viewer's perspective. Avoid I / me / my / we / our.
+
+EMOJI RULE: only at the very END of the hook (never start or middle), 1-2 max, and only when it reinforces the meaning — never pure decoration.
+
+NEVER output a generic hook unless the subject is clearly named in the same breath: "You Won't Believe This 😱", "This Is Crazy 🤯", "You Need To See This 👀", "Wait Until You See This 😳", "This Changes Everything 🔥" are all banned as-is. Never sacrifice topic clarity for a punchier generic hook.
+
+Internally weigh several angles (problem-based, curiosity-based, insight-based, ranking/debate, humor/reaction) for topic clarity, viewer relevance, curiosity, brevity, accuracy, readability, and specificity — then output ONLY the single winning hook: no "Hook:" prefix, no surrounding quotes, no alternatives, no reasoning, no hashtags, no bullets. Ready to paste directly into the editor, emoji always at the end."""
 TRANSCRIPT_SPAN_RE = re.compile(
     r"^\[(?P<start>\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*"
     r"(?P<end>\d{1,2}:\d{2}(?::\d{2})?)\]\s*(?P<text>.*)$"
@@ -237,7 +268,7 @@ class TranscriptAnalysis(BaseModel):
 
 
 # Enhanced system prompt with virality scoring and B-roll detection
-transcript_analysis_system_prompt = """You are an expert transcript analyst for short-form video editing.
+transcript_analysis_system_prompt = f"""You are an expert transcript analyst for short-form video editing.
 
 Your job is extraction and ranking, not creative rewriting. You must stay fully grounded in the transcript and choose the best clip candidates that already exist in the source material.
 
@@ -316,13 +347,8 @@ For each segment, provide a detailed virality breakdown:
    - 10-14: Nice but not share-worthy
    - 0-9: Generic content
 
-HOOK TITLES ("hook_title" per segment):
-- Write a short on-screen headline (3-9 words) that is burned into the top of the clip
-- It must make a scrolling viewer stop: a bold claim, curiosity gap, number, or stakes taken directly from the segment
-- Stay grounded: only promise what the clip actually delivers; never invent facts or numbers
-- Do not simply repeat the first spoken words verbatim; reframe them as a headline
-- Plain text only: no hashtags, no emojis, no quotes around the title
-- Good examples: "The $40k mistake I keep seeing", "Why nobody tells you this about VC", "Do this before your next interview"
+HOOK TITLES ("hook_title" per segment): write the on-screen text hook for the segment following these rules exactly:
+{HOOK_GENERATION_RULES}
 
 HOOK TYPES to identify:
 - "question": Opens with a question that creates curiosity
@@ -491,16 +517,12 @@ class HookVariants(BaseModel):
 _hook_variants_agent: Optional[Agent[None, HookVariants]] = None
 _hook_variants_agent_signature: Optional[tuple[str | None, ...]] = None
 
-HOOK_VARIANTS_SYSTEM_PROMPT = """You write short, punchy on-screen headlines ("hooks") for viral short-form video clips.
+HOOK_VARIANTS_SYSTEM_PROMPT = f"""You write on-screen text hooks for viral short-form video clips.
 
-Given a clip's transcript and its current hook title, write alternative hook titles that could replace it.
+Given a clip's transcript and its current hook title, write alternative hooks that could replace it. Every variant must follow these rules:
+{HOOK_GENERATION_RULES}
 
-Rules for every variant:
-- 3-9 words, plain text only (no hashtags, no emojis, no surrounding quotes)
-- Grounded in the transcript: only promise what the clip actually delivers, never invent facts or numbers
-- Make a scrolling viewer stop: a bold claim, curiosity gap, number, or stakes taken from the segment
-- Each variant must take a genuinely different angle from the others and from the current hook title (e.g. question vs. bold statement vs. number/stat vs. contrast)
-- Do not simply repeat the first spoken words verbatim"""
+Additionally, since these are alternatives to an existing hook: each variant must take a genuinely different angle from the others and from the current hook title (e.g. question vs. bold statement vs. number/stat vs. contrast)."""
 
 
 def get_hook_variants_agent() -> Agent[None, HookVariants]:
@@ -529,6 +551,133 @@ def get_hook_variants_agent() -> Agent[None, HookVariants]:
         )
         _hook_variants_agent_signature = signature
     return _hook_variants_agent
+
+
+LlmProvider = Literal["ollama", "gemini", "unavailable"]
+
+_FallbackT = TypeVar("_FallbackT")
+
+_STRICT_JSON_RETRY_SUFFIX = (
+    "\n\nYour previous response was not valid JSON matching the required schema. "
+    "Output ONLY valid JSON matching the schema, nothing else."
+)
+
+
+# "quality" -> Ollama model overrides for a one-off call (e.g. the per-clip
+# metadata "Regenerate" button's model picker), without touching the global
+# OLLAMA_MODEL runtime setting other callers rely on.
+_QUALITY_OLLAMA_MODEL_OVERRIDES = {
+    "fast": "qwen2.5:3b-instruct",
+    "balanced": "llama3.2:3b",
+    "high": "qwen2.5:7b-instruct",
+}
+
+
+def _build_ollama_model(runtime_config: Config, model_override: Optional[str] = None) -> OllamaModel:
+    return OllamaModel(
+        model_override or runtime_config.ollama_model,
+        provider=OllamaProvider(
+            base_url=runtime_config.resolve_ollama_base_url(),
+            api_key=runtime_config.ollama_api_key,
+        ),
+    )
+
+
+def _build_gemini_model(runtime_config: Config) -> str:
+    return f"google-gla:{runtime_config.gemini_model}"
+
+
+async def run_with_llm_fallback(
+    prompt: str,
+    output_type: type[_FallbackT],
+    *,
+    system_prompt: str = "",
+    allow_gemini: bool = False,
+    max_output_tokens: int = 2000,
+    quality: Optional[str] = None,
+) -> tuple[Optional[_FallbackT], LlmProvider]:
+    """Run `prompt` against the local Ollama model first (retrying once with a
+    stricter prompt on malformed/schema-invalid output), then fall back to
+    Gemini if `allow_gemini` and a Google API key is configured, else give up.
+
+    Ollama and render jobs both acquire the shared "gpu" resource slot so a
+    local LLM call and a video render are never in flight on the same GPU at
+    once (see workers/resource_locks.py); Gemini is a remote call and skips
+    that slot. Every call (Ollama or Gemini) acquires the "llm" slot, capping
+    concurrent LLM calls across the app at 1 by default. Output is capped at
+    `max_output_tokens` (~2000 by default) since every caller here truncates
+    its own input aggressively and expects a short, structured response.
+
+    Returns (result, provider). `provider == "unavailable"` (result is None)
+    means callers should skip per spec (content policy: skip silently;
+    metadata: skip that clip) rather than treat this as a hard failure.
+    """
+    runtime_config = get_config()
+    apply_settings_to_process_env(runtime_config.as_runtime_settings())
+    # Lower temperature/top_p favor consistent, schema-conforming structured
+    # output over creative variation — appropriate for every caller of this
+    # function (metadata, content policy, hook variants), all of which want a
+    # reliably parseable result rather than creative prose.
+    model_settings = {"max_tokens": max_output_tokens, "temperature": 0.4, "top_p": 0.9}
+    # Local CPU inference can take far longer than a cloud API for the same
+    # prompt/output size — the client's default timeout is tuned for fast
+    # remote APIs and cuts off a real local model mid-generation. Gemini
+    # keeps the (short) library default since it's a fast cloud call.
+    #
+    # A flat timeout has a real failure mode though: when Ollama is simply
+    # unreachable (wrong URL, daemon down, host firewalled), the TCP
+    # connection attempt itself can hang for a long time before failing.
+    # httpx.Timeout separates the connect phase (kept short, so an
+    # unreachable host fails fast into the Gemini fallback) from the read
+    # phase, which is left unbounded (`None`) so a slow-but-connected local
+    # model is never cut off mid-generation regardless of output size.
+    ollama_model_settings = {
+        **model_settings,
+        "timeout": httpx.Timeout(None, connect=5.0),
+    }
+
+    ollama_model_override = _QUALITY_OLLAMA_MODEL_OVERRIDES.get(quality or "")
+    ollama_agent = Agent[None, output_type](
+        model=_build_ollama_model(runtime_config, ollama_model_override),
+        output_type=output_type,
+        system_prompt=system_prompt,
+        output_retries=1,
+        model_settings=ollama_model_settings,
+    )
+
+    # quality="gemini" is an explicit request to skip local inference
+    # entirely for this call, not just prefer it as a fallback.
+    skip_ollama = quality == "gemini"
+
+    async with resource_slot("llm", 1):
+        if not skip_ollama:
+            async with resource_slot("gpu", 1):
+                for attempt_prompt in (prompt, prompt + _STRICT_JSON_RETRY_SUFFIX):
+                    try:
+                        result = await ollama_agent.run(attempt_prompt)
+                        return result.output, "ollama"
+                    except Exception as exc:
+                        logger.info("Ollama LLM call failed (%s)", exc)
+
+        if allow_gemini and runtime_config.google_api_key:
+            try:
+                gemini_agent = Agent[None, output_type](
+                    model=_build_gemini_model(runtime_config),
+                    output_type=output_type,
+                    system_prompt=system_prompt,
+                    output_retries=2,
+                    model_settings=model_settings,
+                )
+                result = await with_exponential_backoff(
+                    lambda: gemini_agent.run(prompt),
+                    max_retries=4,
+                    retryable=is_rate_limit_error,
+                )
+                return result.output, "gemini"
+            except Exception as exc:
+                logger.warning("Gemini fallback also failed (%s)", exc)
+
+    return None, "unavailable"
 
 
 async def generate_hook_title_variants(

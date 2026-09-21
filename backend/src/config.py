@@ -25,6 +25,11 @@ class Config:
         )
         self.whisper_language = self._get_runtime_setting("WHISPER_LANGUAGE")
         self.llm = self._get_runtime_setting("LLM") or self._infer_default_llm()
+        self.llm_provider_mode = self._normalize_llm_provider_mode(
+            self._get_runtime_setting("LLM_PROVIDER_MODE")
+        )
+        self.ollama_model = self._get_runtime_setting("OLLAMA_MODEL") or "llama3.2:3b"
+        self.gemini_model = self._get_runtime_setting("GEMINI_MODEL") or "gemini-3.5-flash-lite"
         self.assembly_ai_api_key = self._get_runtime_setting("ASSEMBLY_AI_API_KEY")
         self.assembly_ai_http_timeout_seconds = int(
             os.getenv("ASSEMBLY_AI_HTTP_TIMEOUT_SECONDS", "900")
@@ -127,6 +132,37 @@ class Config:
         self.fast_mode_transcript_model = os.getenv(
             "FAST_MODE_TRANSCRIPT_MODEL", "universal"
         )
+        # Whether the user has opted into GPU-accelerated rendering. Whether
+        # a render actually uses the GPU also depends on hardware being
+        # detected at render time (video_utils.detect_gpu_encoder) — this
+        # flag alone never guarantees it.
+        self.gpu_acceleration_enabled = (
+            self._get_runtime_setting("GPU_ACCELERATION_ENABLED") or "false"
+        ).strip().lower() == "true"
+        # Whether metadata (title/description/tags) auto-generates once per
+        # finished video, right after clip detection. Defaults on; turning
+        # it off falls back to the manual "Regenerate Metadata" button only.
+        self.auto_generate_metadata_enabled = (
+            self._get_runtime_setting("AUTO_GENERATE_METADATA_ENABLED") or "true"
+        ).strip().lower() == "true"
+
+        # Ranking tool settings (Settings -> Ranking). The SFX file itself is
+        # uploaded via POST /ranking/settings/sfx into SFX_DIR (video_utils.py)
+        # under this reserved filename; this setting only remembers which
+        # filename (if any) is the configured default, same "settings row
+        # holds a reference, not the bytes" pattern as everything else here.
+        self.ranking_sfx_filename = self._get_runtime_setting("RANKING_SFX_FILENAME") or None
+        self.ranking_sfx_offset_pct = float(
+            self._get_runtime_setting("RANKING_SFX_OFFSET_PCT") or "10"
+        )
+        self.ranking_default_framing = self._normalize_ranking_framing(
+            self._get_runtime_setting("RANKING_DEFAULT_FRAMING") or "blur_fill"
+        )
+
+    @staticmethod
+    def _normalize_ranking_framing(value: str) -> str:
+        value = (value or "").strip().lower()
+        return value if value in {"blur_fill", "crop_fill", "letterbox"} else "blur_fill"
 
     def max_youtube_video_duration_for_plan(
         self, plan: str | None, subscription_status: str | None
@@ -187,6 +223,14 @@ class Config:
             "CLIP_DURATION": str(self.clip_duration),
             "DEFAULT_PROCESSING_MODE": self.default_processing_mode,
             "FAST_MODE_MAX_CLIPS": str(self.fast_mode_max_clips),
+            "GPU_ACCELERATION_ENABLED": "true" if self.gpu_acceleration_enabled else "false",
+            "AUTO_GENERATE_METADATA_ENABLED": "true" if self.auto_generate_metadata_enabled else "false",
+            "LLM_PROVIDER_MODE": self.llm_provider_mode,
+            "OLLAMA_MODEL": self.ollama_model,
+            "GEMINI_MODEL": self.gemini_model,
+            "RANKING_SFX_FILENAME": self.ranking_sfx_filename,
+            "RANKING_SFX_OFFSET_PCT": str(self.ranking_sfx_offset_pct),
+            "RANKING_DEFAULT_FRAMING": self.ranking_default_framing,
         }
 
     @staticmethod
@@ -235,6 +279,13 @@ class Config:
         if normalized == "apify":
             return "apify"
         return "yt_dlp"
+
+    @staticmethod
+    def _normalize_llm_provider_mode(value: str | None) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized in {"ollama", "gemini", "hybrid"}:
+            return normalized
+        return "ollama"
 
     def resolve_youtube_data_api_key(self) -> str | None:
         return self.youtube_data_api_key or self.google_api_key

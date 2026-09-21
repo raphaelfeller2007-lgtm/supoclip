@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { MessageSquare, Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { track } from "@/lib/datafast";
 
 import { Button } from "@/components/ui/button";
@@ -68,7 +68,7 @@ export function FeedbackButton() {
       <PopoverTrigger asChild>
         <Button
           size="icon"
-          className="fixed bottom-5 right-5 z-50 h-11 w-11 rounded-full shadow-lg"
+          className="fixed bottom-5 right-5 z-50 h-11 w-11 rounded-full"
         >
           <MessageSquare className="h-5 w-5" />
         </Button>
