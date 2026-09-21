@@ -40,6 +40,7 @@ import { ContentPolicyProjectPanel } from "@/components/editor/content-policy-pr
 import { ClipMetadataPanel } from "@/components/editor/clip-metadata-panel";
 import { TemplatePicker, type TemplateInfo } from "@/components/template-picker";
 import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
 import { SafeZoneOverlay } from "@/components/safe-zone-overlay";
 import {
@@ -1897,12 +1898,27 @@ export default function TaskPage() {
                           />
                         </label>
                         {(projectHookStyle.hook_stroke_width ?? 3) > 0 && (
-                          <input
-                            type="color"
-                            value={projectHookStyle.hook_stroke_color ?? "#000000"}
-                            onChange={(e) => updateProjectHookStyle("hook_stroke_color", e.target.value)}
-                            className="w-full h-8 rounded border border-border cursor-pointer"
-                          />
+                          <>
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] text-muted-foreground">Width</span>
+                              <span className="text-[11px] text-muted-foreground tabular-nums">
+                                {projectHookStyle.hook_stroke_width ?? 3}px
+                              </span>
+                            </div>
+                            <Slider
+                              value={[projectHookStyle.hook_stroke_width ?? 3]}
+                              min={1}
+                              max={10}
+                              step={1}
+                              onValueChange={([value]) => updateProjectHookStyle("hook_stroke_width", value)}
+                            />
+                            <input
+                              type="color"
+                              value={projectHookStyle.hook_stroke_color ?? "#000000"}
+                              onChange={(e) => updateProjectHookStyle("hook_stroke_color", e.target.value)}
+                              className="w-full h-8 rounded border border-border cursor-pointer"
+                            />
+                          </>
                         )}
                       </div>
                     </div>

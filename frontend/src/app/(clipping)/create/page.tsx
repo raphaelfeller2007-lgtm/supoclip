@@ -1135,19 +1135,34 @@ export default function VideoProcessingPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Outline</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={hookStyle.hook_stroke_color ?? "#000000"}
-                      onChange={(e) => updateHookStyle("hook_stroke_color", e.target.value)}
-                      disabled={isLoading}
-                      className="w-10 h-8 border border-border cursor-pointer"
-                    />
-                    <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => updateHookStyle("hook_stroke_color", null)}>
-                      Reset
-                    </button>
-                  </div>
+                  <label className="text-sm text-muted-foreground flex items-center justify-between">
+                    <span>Outline</span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {(hookStyle.hook_stroke_width ?? 3) === 0 ? "Off" : `${hookStyle.hook_stroke_width ?? 3}px`}
+                    </span>
+                  </label>
+                  <Slider
+                    value={[hookStyle.hook_stroke_width ?? 3]}
+                    min={0}
+                    max={10}
+                    step={1}
+                    disabled={isLoading}
+                    onValueChange={([value]) => updateHookStyle("hook_stroke_width", value)}
+                  />
+                  {(hookStyle.hook_stroke_width ?? 3) > 0 && (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={hookStyle.hook_stroke_color ?? "#000000"}
+                        onChange={(e) => updateHookStyle("hook_stroke_color", e.target.value)}
+                        disabled={isLoading}
+                        className="w-10 h-8 border border-border cursor-pointer"
+                      />
+                      <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => updateHookStyle("hook_stroke_color", null)}>
+                        Reset
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-2">

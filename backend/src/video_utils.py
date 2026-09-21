@@ -1800,6 +1800,42 @@ def hex_to_ass_color(
     return f"&H{alpha_part}{blue}{green}{red}&"
 
 
+def hex_to_ass_bgr(value: Optional[str], fallback: str = "#000000") -> str:
+    """RGB-only ASS color for override tags like `\\1c`/`\\3c` (which take a
+    bare BBGGRR, unlike a Style line's AABBGGRR field) — used for the hand-drawn
+    rounded hook box, which is always opaque so alpha never needs to travel
+    with it."""
+    value = (value or fallback).strip().lstrip("#")
+    if len(value) == 8:
+        value = value[:6]
+    if len(value) != 6:
+        value = fallback.lstrip("#")[:6]
+    red, green, blue = value[0:2], value[2:4], value[4:6]
+    return f"{blue}{green}{red}".upper()
+
+
+def rounded_rect_drawing(width: float, height: float, radius: float) -> str:
+    """ASS `\\p` drawing commands for a rounded rectangle spanning (0,0) to
+    (width,height), so the hook background box can render as a smooth pill
+    instead of relying on BorderStyle=3's hard-cornered auto-box."""
+    radius = max(0.0, min(radius, width / 2, height / 2))
+    w, h, r = width, height, radius
+    if r <= 0:
+        return f"m 0 0 l {w:.1f} 0 l {w:.1f} {h:.1f} l 0 {h:.1f}"
+    k = r * 0.5522847498  # cubic-bezier constant for approximating a quarter circle
+    return (
+        f"m {r:.1f} 0 "
+        f"l {w - r:.1f} 0 "
+        f"b {w - r + k:.1f} 0 {w:.1f} {r - k:.1f} {w:.1f} {r:.1f} "
+        f"l {w:.1f} {h - r:.1f} "
+        f"b {w:.1f} {h - r + k:.1f} {w - r + k:.1f} {h:.1f} {w - r:.1f} {h:.1f} "
+        f"l {r:.1f} {h:.1f} "
+        f"b {r - k:.1f} {h:.1f} 0 {h - r + k:.1f} 0 {h - r:.1f} "
+        f"l 0 {r:.1f} "
+        f"b 0 {r - k:.1f} {r - k:.1f} 0 {r:.1f} 0"
+    )
+
+
 def escape_ass_text(value: str) -> str:
     return (
         str(value)
@@ -2256,20 +2292,16 @@ def build_hook_title_ass(
     # shows.
     stroke_color = effective.get("hook_stroke_color") or template.get("stroke_color")
     text_outline_color = hex_to_ass_color(stroke_color, "#000000")
+    # Box fill/outline colors are read as raw hex further down and converted
+    # with hex_to_ass_bgr right at the drawing call — the box is hand-drawn as
+    # a rounded-rect vector shape (see rounded_rect_drawing), always fully
+    # opaque, so there's no ASS Style color field to precompute here the way
+    # the text layer needs one.
     background_color = effective.get("hook_background_color")
     has_box_fill = background_color is not None
-    # Always fully opaque — the UI no longer exposes an alpha control for this
-    # color, but legacy saved styles may still carry an alpha suffix from
-    # before that change, so force it off here rather than trusting storage.
-    fill_color = hex_to_ass_color(background_color, "#000000", include_alpha=False)
     box_outline_color_value = effective.get("hook_box_outline_color")
     has_box_outline = box_outline_color_value is not None
-    box_outline_color = hex_to_ass_color(box_outline_color_value, "#000000")
     has_box = has_box_fill or has_box_outline
-    # Fully transparent primary fill for box-only layers — the box's own text
-    # glyph must stay invisible (only its BorderStyle=3 padding/box shows),
-    # since the real glyph is drawn separately by the text layer on top.
-    invisible_primary = hex_to_ass_color("#FFFFFF00")
 
     font_size_scale = float(effective.get("hook_font_size_scale") or 0.82)
     # Hook titles are allowed to run noticeably larger than captions since
@@ -2293,10 +2325,12 @@ def build_hook_title_ass(
         hook_stroke_width if hook_stroke_width is not None else template.get("stroke_width", 3) or 0
     )
     has_text_outline = base_stroke > 0
-    # Thin, legibility-only stroke (~2% of glyph size) rather than a heavy
-    # border — the outline should help text read over video, not compete
-    # with it for visual weight.
-    text_outline_px = max(1, round(hook_px * 0.02)) if has_text_outline else 0
+    # Scales with the user's chosen stroke width (settings slider, 0-10) but
+    # gently — at the default of 3 this still lands around ~2% of glyph size
+    # (thin, legibility-only), while a user cranking the slider up gets a
+    # visibly thicker border instead of the old fixed-thin look regardless of
+    # their setting.
+    text_outline_px = max(1, round(hook_px * base_stroke * 0.007)) if has_text_outline else 0
 
     # Backing-box padding — roomy pill, not a tight hug around the glyphs.
     fill_pad = max(10, round(hook_px * 0.3))
@@ -2344,21 +2378,17 @@ def build_hook_title_ass(
         f"Style: Hook,{hook_font_name},{hook_px},{primary},&H000000FF,{text_outline_color},&H00000000,"
         f"1,0,0,0,100,100,0,0,1,{text_outline_px},{shadow_px},{alignment},60,60,{margin_v},1"
     )
-    box_style_lines = []
-    if has_box_outline:
-        # BackColour set to the same color defensively (a different libass
-        # build might honour it as the spec describes — see ranking_overlay.py's
-        # identical note), even though it's a no-op on this build.
-        box_style_lines.append(
-            f"Style: HookBoxBorder,{hook_font_name},{hook_px},{invisible_primary},&H000000FF,"
-            f"{box_outline_color},{box_outline_color},1,0,0,0,100,100,0,0,3,{border_pad},0,{alignment},60,60,{margin_v},1"
-        )
-    if has_box_fill:
-        box_style_lines.append(
-            f"Style: HookBoxFill,{hook_font_name},{hook_px},{invisible_primary},&H000000FF,"
-            f"{fill_color},{fill_color},1,0,0,0,100,100,0,0,3,{fill_pad},0,{alignment},60,60,{margin_v},1"
-        )
-    style_line = "\n".join(box_style_lines + [text_style_line])
+    # The background box is hand-drawn as a rounded-rect vector shape rather
+    # than relying on BorderStyle=3's auto-box (always hard-cornered, and
+    # stacking a same-shaped border+fill rectangle on top of each other read
+    # as "two flat squares," not one smooth pill). BorderStyle=1/Outline=0/
+    # Shadow=0 keeps the style itself from adding any stroke to the shape —
+    # every box's color/size/position comes from its own override tags below.
+    box_style_line = (
+        f"Style: HookBox,{hook_font_name},{hook_px},&H00FFFFFF&,&H000000FF,&H00000000&,&H00000000&,"
+        "1,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1"
+    )
+    style_line = "\n".join(([box_style_line] if has_box else []) + [text_style_line])
 
     # Accent power words / numbers / user-requested keywords / any other
     # content word (i.e. not a short glue word) in the highlight colour, so
@@ -2390,6 +2420,20 @@ def build_hook_title_ass(
     if output_duration <= HOOK_TITLE_MIN_SECONDS:
         start, end = 0.0, max(0.5, output_duration)
 
+    # Real per-font line spacing (see measure_line_height) instead of a
+    # guessed multiplier — needed both to place a trailing emoji against the
+    # actual last line and to size the background box tall enough to cover
+    # every line it sits behind.
+    line_height = measure_line_height(hook_font_family, hook_font_name, hook_px)
+    num_lines = max(1, len(lines))
+    block_height = num_lines * line_height
+    if alignment == 2:  # bottom-anchored (an2): pos_y is the block's bottom edge
+        block_top = pos_y - block_height
+    elif alignment == 5:  # vertically centered as a block (an5)
+        block_top = pos_y - block_height / 2
+    else:  # top-anchored (an8): pos_y is the block's top edge
+        block_top = pos_y
+
     image_overlays: List[Dict[str, Any]] = []
     if emoji_cluster:
         # render_emoji_cluster_png crops tight to the glyph's own bbox, and
@@ -2401,27 +2445,21 @@ def build_hook_title_ass(
         rendered = render_emoji_cluster_png(emoji_cluster, glyph_px)
         if rendered:
             emoji_path, emoji_w, emoji_h = rendered
-            line_height = measure_line_height(hook_font_family, hook_font_name, hook_px)
-            num_lines = max(1, len(lines))
             last_line_text = lines[-1] if lines else ""
-            if alignment == 2:  # bottom-anchored (an2)
-                last_line_center_y = video_height - margin_v - line_height / 2
-            elif alignment == 5:  # vertically centered as a block (an5)
-                block_height = num_lines * line_height
-                block_top = video_height / 2 - block_height / 2
-                last_line_center_y = block_top + (num_lines - 1) * line_height + line_height / 2
-            else:  # top-anchored (an8)
-                last_line_center_y = margin_v + (num_lines - 1) * line_height + line_height / 2
+            last_line_center_y = block_top + (num_lines - 1) * line_height + line_height / 2
             # Text glyphs sit in the upper portion of the line box (baseline is
             # well above the box's bottom, to leave descender room most hook
-            # words never use), so their visual cap-height center sits above
-            # the box's geometric center — nudge up to match, or the emoji
-            # reads as sitting low relative to the letters next to it.
-            cap_center_y = last_line_center_y - hook_px * 0.12
+            # words never use), so their visual cap-height center sits well
+            # above the line's geometric center — nudge up to match, or the
+            # emoji reads as sitting low relative to the letters next to it.
+            cap_center_y = last_line_center_y - hook_px * 0.22
             last_line_width = measure_text_width(
                 last_line_text, hook_font_family, hook_font_name, hook_px
             )
-            gap = round(hook_px * 0.16)
+            # A tight, natural gap — this used to sit nearly a full glyph-width
+            # away from the last word, which read as "floating" rather than
+            # attached to the text it follows.
+            gap = round(hook_px * 0.04)
             emoji_x = round(video_width / 2 + last_line_width / 2 + gap)
             emoji_y = round(cap_center_y - emoji_h / 2)
             emoji_x = max(0, min(emoji_x, video_width - emoji_w))
@@ -2470,24 +2508,70 @@ def build_hook_title_ass(
         entrance = "\\fad(160,240)"
         if template.get("word_pop", True):
             entrance += "\\fscx90\\fscy90\\t(0,160,\\fscx100\\fscy100)"
-    # A hair of edge blur keeps the box layers from reading as a harsh flat
-    # rectangle — softened corners without needing custom vector geometry.
-    box_tags = f"\\blur1{pos_tag}{entrance}"
     text_tags = f"{pos_tag}{entrance}"
-    box_override = f"{{{box_tags}}}" if box_tags else ""
     text_override = f"{{{text_tags}}}" if text_tags else ""
 
     events = []
-    if has_box_outline:
-        events.append(
-            f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},HookBoxBorder,,0,0,0,,"
-            f"{box_override}{text}"
+    if has_box:
+        block_width = max(
+            (measure_text_width(line, hook_font_family, hook_font_name, hook_px) for line in lines),
+            default=0.0,
         )
-    if has_box_fill:
-        events.append(
-            f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},HookBoxFill,,0,0,0,,"
-            f"{box_override}{text}"
-        )
+
+        fill_box_w = block_width + 2 * fill_pad
+        fill_box_h = block_height + 2 * fill_pad
+        fill_box_left = pos_x - fill_box_w / 2
+        fill_box_top = block_top - fill_pad
+        fill_box_right = fill_box_left + fill_box_w
+        fill_box_bottom = fill_box_top + fill_box_h
+        if image_overlays:
+            # Extend whichever edges the emoji actually sits past, rather than
+            # widening the box symmetrically around its center — the emoji
+            # only ever sticks out to one side, so growing both sides equally
+            # both under-covers that side and needlessly widens the other.
+            overlay = image_overlays[0]
+            emoji_pad = fill_pad * 0.5
+            fill_box_left = min(fill_box_left, overlay["x"] - emoji_pad)
+            fill_box_right = max(fill_box_right, overlay["x"] + overlay["width"] + emoji_pad)
+            fill_box_top = min(fill_box_top, overlay["y"] - emoji_pad)
+            fill_box_bottom = max(fill_box_bottom, overlay["y"] + overlay["height"] + emoji_pad)
+            fill_box_w = fill_box_right - fill_box_left
+            fill_box_h = fill_box_bottom - fill_box_top
+
+        border_extra = border_pad - fill_pad
+        border_box_w = fill_box_w + 2 * border_extra
+        border_box_h = fill_box_h + 2 * border_extra
+        border_box_left = fill_box_left - border_extra
+        border_box_top = fill_box_top - border_extra
+
+        # Pill-shaped ends by default (radius = half the box height) — reads
+        # as one smooth rounded shape rather than the old hard-cornered
+        # rectangle-on-rectangle stack.
+        fill_radius = fill_box_h / 2
+        border_radius = border_box_h / 2
+
+        if has_box_outline:
+            border_bgr = hex_to_ass_bgr(box_outline_color_value, "#000000")
+            border_path = rounded_rect_drawing(border_box_w, border_box_h, border_radius)
+            border_tags = (
+                f"\\an7\\pos({border_box_left:.0f},{border_box_top:.0f})"
+                f"\\bord0\\shad0\\blur1\\1c&H{border_bgr}&\\1a&H00&{entrance}\\p1"
+            )
+            events.append(
+                f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},HookBox,,0,0,0,,"
+                f"{{{border_tags}}}{border_path}{{\\p0}}"
+            )
+        if has_box_fill:
+            fill_bgr = hex_to_ass_bgr(background_color, "#000000")
+            fill_path = rounded_rect_drawing(fill_box_w, fill_box_h, fill_radius)
+            fill_tags = (
+                f"\\an7\\pos({fill_box_left:.0f},{fill_box_top:.0f})"
+                f"\\bord0\\shad0\\blur1\\1c&H{fill_bgr}&\\1a&H00&{entrance}\\p1"
+            )
+            events.append(
+                f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},HookBox,,0,0,0,,"
+                f"{{{fill_tags}}}{fill_path}{{\\p0}}"
+            )
     events.append(
         f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
         f"{text_override}{text}"
