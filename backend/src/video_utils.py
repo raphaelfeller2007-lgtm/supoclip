@@ -2055,32 +2055,38 @@ def measure_text_width(text: str, font_family: Optional[str], font_name: str, px
     return len(text) * px * 0.55  # rough fallback if fontconfig/Pillow fails
 
 
-_RENDERED_TEXT_WIDTH_CACHE: Dict[Tuple[str, str, int, int], Optional[float]] = {}
+_RENDERED_LINE_METRICS_CACHE: Dict[Tuple[str, str, int, int], Optional[Tuple[float, float, float]]] = {}
 
 
-def measure_rendered_text_width(
+def measure_rendered_line_metrics(
     text: str, ass_font_name_value: str, px: int, outline_px: int = 0
-) -> Optional[float]:
-    """Real libass-rendered ink width for `text`, by actually rendering one
-    line through ffmpeg's `ass` filter and measuring the output's alpha
-    bounding box — not an estimate.
+) -> Optional[Tuple[float, float, float]]:
+    """Real libass-rendered (width, ink_top, ink_bottom) for `text`, by
+    actually rendering one line through ffmpeg's `ass` filter and measuring
+    the output's real ink — not an estimate. `ink_top`/`ink_bottom` are
+    offsets from the line's own top edge (i.e. where \\an7\\pos anchors it),
+    so a caller can find exactly where this text's ink starts/ends without
+    guessing from font ascent/descent metrics.
 
     Pillow's plain-layout `getlength()` (measure_text_width) doesn't
     reproduce libass/HarfBuzz's real shaping closely enough on some bundled
     display fonts to place things pixel-accurately: verified directly on
     THEBOLDFONT, a 5-word line measured ~756px via Pillow but rendered at
     ~799px through libass — a 43px error, easily larger than an entire word
-    of slack. That's what kept throwing off hook box/emoji alignment even
-    after the font-resolution bug (see caption_font_family above) was fixed.
-    This asks the actual renderer instead of guessing. Returns None (letting
-    the caller fall back to measure_text_width) if ffmpeg/libass isn't
-    available or rendering fails for any reason.
+    of slack. Font ascent/descent metrics have the same problem for vertical
+    placement (a font's declared ascent usually leaves headroom for accents
+    that a plain capital letter never uses, so "top + ascent" lands a few px
+    below where the glyphs visually end) — that's what kept the hook emoji
+    looking slightly off-baseline even after width was fixed. This asks the
+    actual renderer instead of guessing, for both axes at once. Returns None
+    (letting the caller fall back to font-metric estimates) if ffmpeg/libass
+    isn't available or rendering fails for any reason.
     """
     if not text:
-        return 0.0
+        return 0.0, 0.0, 0.0
     cache_key = (text, ass_font_name_value, px, outline_px)
-    if cache_key in _RENDERED_TEXT_WIDTH_CACHE:
-        return _RENDERED_TEXT_WIDTH_CACHE[cache_key]
+    if cache_key in _RENDERED_LINE_METRICS_CACHE:
+        return _RENDERED_LINE_METRICS_CACHE[cache_key]
 
     pad = max(20, px)
     canvas_w = pad * 2 + px * max(1, len(text)) * 2
@@ -2108,7 +2114,7 @@ def measure_rendered_text_width(
     # alpha-bbox detection silently measured nothing at all. Pure green is
     # never a hook text/outline color, so "not background" is unambiguous.
     bg = (0, 255, 0)
-    result: Optional[float] = None
+    result: Optional[Tuple[float, float, float]] = None
     try:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -2132,11 +2138,23 @@ def measure_rendered_text_width(
             arr = np.array(Image.open(out_path).convert("RGB"))
             diff = np.abs(arr.astype(int) - np.array(bg)).sum(axis=2)
             ys, xs = np.where(diff > 40)
-            result = float(xs.max() - xs.min()) if xs.size else 0.0
+            if xs.size:
+                result = (float(xs.max() - xs.min()), float(ys.min() - pad), float(ys.max() - pad))
+            else:
+                result = (0.0, 0.0, 0.0)
     except Exception:
         result = None
-    _RENDERED_TEXT_WIDTH_CACHE[cache_key] = result
+    _RENDERED_LINE_METRICS_CACHE[cache_key] = result
     return result
+
+
+def measure_rendered_text_width(
+    text: str, ass_font_name_value: str, px: int, outline_px: int = 0
+) -> Optional[float]:
+    """Just the width from measure_rendered_line_metrics, for callers that
+    don't need the vertical ink extent too."""
+    metrics = measure_rendered_line_metrics(text, ass_font_name_value, px, outline_px)
+    return metrics[0] if metrics is not None else None
 
 
 def measure_font_metrics(font_family: Optional[str], font_name: str, px: int) -> Tuple[float, float]:
@@ -2221,10 +2239,18 @@ def render_emoji_cluster_png(emoji_text: str, px: int) -> Optional[Tuple[Path, i
             _EMOJI_PNG_CACHE[cache_key] = None
             return None
 
-        pad = max(4, native_size // 8)
+        # A full em of margin on every side, not just a small fixed pad —
+        # verified directly that some colour-emoji glyphs' embedded bitmap
+        # artwork overflows the font's own advance-width box (e.g. 🤔's
+        # hand/thumb extends past its nominal glyph width), and the old
+        # tight `native_size // 8` pad clipped that overflow right at the
+        # canvas edge before getbbox() ever saw it. The final image is
+        # cropped tight to the real ink afterward regardless, so a larger
+        # canvas here costs nothing in the output.
+        pad = native_size
         canvas = Image.new(
             "RGBA",
-            (native_size * len(emoji_text) + pad * 2, native_size + pad * 2),
+            (native_size * (len(emoji_text) + 1) + pad * 2, native_size + pad * 2),
             (0, 0, 0, 0),
         )
         draw = ImageDraw.Draw(canvas)
@@ -2533,14 +2559,17 @@ def build_hook_title_ass(
     else:  # top-anchored (an8): pos_y is the block's top edge
         block_top = pos_y
 
-    def _line_width(line: str) -> float:
+    def _line_metrics(line: str) -> Tuple[float, Optional[Tuple[float, float, float]]]:
         # Prefer actually rendering the line through libass and measuring
-        # its real ink — see measure_rendered_text_width for why the
-        # Pillow-based estimate alone isn't trustworthy on every font.
-        rendered_width = measure_rendered_text_width(line, hook_font_name, hook_px, text_outline_px)
-        if rendered_width is not None:
-            return rendered_width
-        return measure_text_width(line, hook_font_family, hook_font_name, hook_px)
+        # its real ink — see measure_rendered_line_metrics for why the
+        # Pillow/font-metric estimates alone aren't trustworthy on every
+        # font. Keeps the full (width, ink_top, ink_bottom) tuple around so
+        # the emoji block below can find the last line's real ink bottom
+        # without rendering it a second time.
+        rendered = measure_rendered_line_metrics(line, hook_font_name, hook_px, text_outline_px)
+        if rendered is not None:
+            return rendered[0], rendered
+        return measure_text_width(line, hook_font_family, hook_font_name, hook_px), None
 
     # Per-line widths, used both to size the background box and to center
     # each line. If there's a trailing emoji, it's folded into the LAST
@@ -2551,7 +2580,8 @@ def build_hook_title_ass(
     # the text, the emoji itself) is derived from this one list, so they
     # can't drift out of sync with each other the way separately-computed
     # positions could.
-    line_widths = [_line_width(line) for line in lines] or [0.0]
+    line_metrics = [_line_metrics(line) for line in lines] or [(0.0, None)]
+    line_widths = [width for width, _ in line_metrics]
     last_line_top = block_top + (num_lines - 1) * line_height
     last_line_left = pos_x - line_widths[-1] / 2
 
@@ -2581,13 +2611,22 @@ def build_hook_title_ass(
             gap = max(gap, hook_px * 0.08)
             line_widths[-1] = text_only_width + gap + emoji_w
             last_line_left = pos_x - line_widths[-1] / 2
-            ascent, _descent = measure_font_metrics(hook_font_family, hook_font_name, hook_px)
-            # Sit on the same baseline as the text around it, like an inline
-            # character rather than a separately-positioned overlay — no
-            # cap-height/center guesswork, just where a glyph would land.
-            baseline_y = last_line_top + ascent
+            # Sit on the last line's own real rendered ink bottom, like an
+            # inline character rather than a separately-positioned overlay —
+            # measured directly (see measure_rendered_line_metrics) rather
+            # than estimated from the font's declared ascent, which usually
+            # reserves headroom above a plain capital letter's real top for
+            # accents/diacritics a hook title never uses, landing the
+            # estimate a few px below where the glyphs visually end.
+            last_line_rendered = line_metrics[-1][1]
+            if last_line_rendered is not None:
+                _width, _ink_top, ink_bottom = last_line_rendered
+                real_bottom_y = last_line_top + ink_bottom
+            else:
+                ascent, _descent = measure_font_metrics(hook_font_family, hook_font_name, hook_px)
+                real_bottom_y = last_line_top + ascent
             emoji_x = round(last_line_left + text_only_width + gap)
-            emoji_y = round(baseline_y - emoji_h)
+            emoji_y = round(real_bottom_y - emoji_h)
             emoji_x = max(0, min(emoji_x, video_width - emoji_w))
             emoji_y = max(0, min(emoji_y, video_height - emoji_h))
             image_overlays.append(
