@@ -185,6 +185,34 @@ def normalize_clip_cleanup_settings(
     }
 
 
+def renormalize_stored_cleanup_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
+    """Re-validate/clamp clip cleanup settings that already went through one
+    normalize_clip_cleanup_settings pass (e.g. read back from Redis task
+    metadata, a stored template, or a `cleanup_settings` dict handed down
+    from an earlier normalize call), without treating their own echoed
+    `sensitivity` display value as fresh primary input.
+
+    normalize_clip_cleanup_settings always returns a `sensitivity` value —
+    derived purely for UI display even when the caller drove cleanup via the
+    explicit booleans — alongside the concrete cut_long_pauses/
+    remove_filler_words/pause_threshold_ms/filtered_words fields. Feeding
+    that already-normalized dict straight back into
+    normalize_clip_cleanup_settings makes the echoed sensitivity
+    indistinguishable from a user having freshly moved the sensitivity
+    slider, which wrongly re-derives (and can silently flip) the concrete
+    booleans on every re-read. Use this helper for that case; call
+    normalize_clip_cleanup_settings directly only for genuinely fresh,
+    top-level input (a new request body).
+    """
+    settings = settings or {}
+    return normalize_clip_cleanup_settings(
+        settings.get("cut_long_pauses"),
+        settings.get("pause_threshold_ms"),
+        settings.get("remove_filler_words"),
+        settings.get("filtered_words"),
+    )
+
+
 def clip_cleanup_enabled(settings: dict[str, Any] | None) -> bool:
     if not settings:
         return False

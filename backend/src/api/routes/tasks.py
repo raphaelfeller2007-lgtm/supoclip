@@ -23,7 +23,10 @@ from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import get_config
 from ...font_registry import is_font_accessible
-from ...clip_cleanup import normalize_clip_cleanup_settings
+from ...clip_cleanup import (
+    normalize_clip_cleanup_settings,
+    renormalize_stored_cleanup_settings,
+)
 from ...video_utils import VALID_OUTPUT_FORMATS
 from ...caption_templates import HOOK_POSITIONS, HOOK_ANIMATIONS, HOOK_TYPES, get_hook_options
 from ...admin_auth import require_admin_user
@@ -1513,13 +1516,7 @@ async def resume_task(
         asub = metadata.get("add_subtitles", add_subtitles)
         if isinstance(asub, bool):
             add_subtitles = asub
-        cleanup_settings = normalize_clip_cleanup_settings(
-            metadata.get("cut_long_pauses"),
-            metadata.get("pause_threshold_ms"),
-            metadata.get("remove_filler_words"),
-            metadata.get("filtered_words"),
-            metadata.get("sensitivity"),
-        )
+        cleanup_settings = renormalize_stored_cleanup_settings(metadata)
         # These were previously loaded into `metadata` but never forwarded to
         # the re-enqueued job, so resuming a task silently dropped hook
         # styling, social overlay, target duration, and clip-count settings.

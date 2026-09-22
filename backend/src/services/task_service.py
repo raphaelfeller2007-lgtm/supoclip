@@ -35,7 +35,10 @@ from ..clip_editor import (
 )
 from ..video_utils import VALID_OUTPUT_FORMATS, parse_timestamp_to_seconds
 from ..youtube_utils import cleanup_downloaded_files, extract_video_id
-from ..clip_cleanup import normalize_clip_cleanup_settings
+from ..clip_cleanup import (
+    normalize_clip_cleanup_settings,
+    renormalize_stored_cleanup_settings,
+)
 from ..ai import TRANSCRIPT_ANALYSIS_CACHE_VERSION
 from ..clip_source_map import (
     copy_clip_source_ranges,
@@ -326,8 +329,8 @@ class TaskService:
                 perf_counter() - pipeline_start, 3
             )
 
-            normalized_cleanup_settings = normalize_clip_cleanup_settings(
-                **(cleanup_settings or {})
+            normalized_cleanup_settings = renormalize_stored_cleanup_settings(
+                cleanup_settings
             )
 
             # Render clips incrementally: render, save, notify one at a time
@@ -802,20 +805,8 @@ class TaskService:
             "filtered_words": metadata.get("filtered_words"),
             "sensitivity": metadata.get("sensitivity"),
         }
-        normalized_cleanup_settings = normalize_clip_cleanup_settings(
-            cleanup_payload.get("cut_long_pauses"),
-            cleanup_payload.get("pause_threshold_ms"),
-            cleanup_payload.get("remove_filler_words"),
-            cleanup_payload.get("filtered_words"),
-            cleanup_payload.get("sensitivity"),
-        )
-        existing_cleanup_settings = normalize_clip_cleanup_settings(
-            metadata.get("cut_long_pauses"),
-            metadata.get("pause_threshold_ms"),
-            metadata.get("remove_filler_words"),
-            metadata.get("filtered_words"),
-            metadata.get("sensitivity"),
-        )
+        normalized_cleanup_settings = renormalize_stored_cleanup_settings(cleanup_payload)
+        existing_cleanup_settings = renormalize_stored_cleanup_settings(metadata)
         should_recompute_cleanup = (
             cleanup_settings is not None
             and normalized_cleanup_settings != existing_cleanup_settings
@@ -986,12 +977,7 @@ class TaskService:
         add_subtitles = metadata.get("add_subtitles", True)
         hook_style = metadata.get("hook_style")
         social_overlay = metadata.get("social_overlay")
-        cleanup_settings = normalize_clip_cleanup_settings(
-            metadata.get("cut_long_pauses"),
-            metadata.get("pause_threshold_ms"),
-            metadata.get("remove_filler_words"),
-            metadata.get("filtered_words"),
-        )
+        cleanup_settings = renormalize_stored_cleanup_settings(metadata)
 
         if source_type == "youtube":
             downloaded = await self.video_service.download_video(source_url)
@@ -1095,12 +1081,7 @@ class TaskService:
         add_subtitles = metadata.get("add_subtitles", True)
         hook_style = metadata.get("hook_style")
         social_overlay = metadata.get("social_overlay")
-        cleanup_settings = normalize_clip_cleanup_settings(
-            metadata.get("cut_long_pauses"),
-            metadata.get("pause_threshold_ms"),
-            metadata.get("remove_filler_words"),
-            metadata.get("filtered_words"),
-        )
+        cleanup_settings = renormalize_stored_cleanup_settings(metadata)
 
         if source_type == "youtube":
             downloaded = await self.video_service.download_video(source_url)
@@ -1481,11 +1462,5 @@ class TaskService:
             "social_overlay": social_overlay if isinstance(social_overlay, dict) else None,
             "broll_settings": broll_settings if isinstance(broll_settings, dict) else None,
             "target_duration_seconds": target_duration_seconds,
-            **normalize_clip_cleanup_settings(
-                parsed.get("cut_long_pauses"),
-                parsed.get("pause_threshold_ms"),
-                parsed.get("remove_filler_words"),
-                parsed.get("filtered_words"),
-                parsed.get("sensitivity"),
-            ),
+            **renormalize_stored_cleanup_settings(parsed),
         }

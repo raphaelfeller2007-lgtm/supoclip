@@ -15,7 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...database import get_db
-from ...clip_cleanup import normalize_clip_cleanup_settings
+from ...clip_cleanup import (
+    normalize_clip_cleanup_settings,
+    renormalize_stored_cleanup_settings,
+)
+from ...emoji_reactions import REACTION_ANIMATIONS
 from ...repositories.template_repository import TemplateRepository
 from ...services.task_service import TaskService
 from .tasks import (
@@ -54,23 +58,67 @@ _SETTINGS_SECTIONS = {
     "effects": ("include_broll", "broll_settings"),
     "export": ("output_format", "add_subtitles", "target_duration_seconds", "max_clips"),
     "ui": ("social_overlay",),
+    # Testing-tab-first sections: not yet captured by "Save as Template from
+    # a task" or pushed onto a task by "Apply template" — there's no
+    # per-task home for either concept yet (safe zones are frontend-only
+    # localStorage state, emoji reactions are purely per-clip) — but they
+    # round-trip in a template's own settings via the section-scoped PATCH
+    # below, same as every other section.
+    "safe_zones": ("safe_zone_enabled_default", "safe_zone_platform_default"),
+    "emoji": ("emoji_defaults",),
 }
 
+_SAFE_ZONE_PLATFORM_IDS = ("all", "tiktok", "reels", "youtube_shorts", "facebook_reels", "threads")
 
-def normalize_template_settings(value: Any) -> Dict[str, Any]:
+
+def _normalize_safe_zone_platform_default(value: Any) -> Optional[str]:
+    return value if value in _SAFE_ZONE_PLATFORM_IDS else None
+
+
+def _normalize_emoji_defaults(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    animation = value.get("default_animation_style")
+    position = value.get("default_position") if isinstance(value.get("default_position"), dict) else {}
+    try:
+        duration = float(value.get("default_duration_seconds"))
+    except (TypeError, ValueError):
+        duration = 1.6
+    return {
+        "default_animation_style": animation if animation in REACTION_ANIMATIONS else "fade_pop",
+        "default_duration_seconds": max(0.5, min(6.0, duration)),
+        "default_position": {
+            "x_pct": max(0.0, min(1.0, float(position.get("x_pct", 0.5) or 0.5))),
+            "y_pct": max(0.0, min(1.0, float(position.get("y_pct", 0.3) or 0.3))),
+        },
+    }
+
+
+def normalize_template_settings(value: Any, *, trust_sensitivity: bool = True) -> Dict[str, Any]:
     """Whitelist and clamp a template settings payload using the same
     per-field normalizers the /tasks/{id}/settings endpoint uses, so a
-    template can never carry a value that endpoint itself would reject."""
+    template can never carry a value that endpoint itself would reject.
+
+    `trust_sensitivity` must be False whenever `value` is already
+    stored/previously-normalized settings (or shaped like an export of
+    them) rather than a fresh, single-submission payload — otherwise the
+    stored `sensitivity` display value (see
+    clip_cleanup.renormalize_stored_cleanup_settings) gets treated as a
+    fresh slider move and can silently flip cut_long_pauses/
+    remove_filler_words on every re-read."""
     if not isinstance(value, dict):
         value = {}
 
-    cleanup = normalize_clip_cleanup_settings(
-        value.get("cut_long_pauses"),
-        value.get("pause_threshold_ms"),
-        value.get("remove_filler_words"),
-        value.get("filtered_words"),
-        value.get("sensitivity"),
-    )
+    if trust_sensitivity:
+        cleanup = normalize_clip_cleanup_settings(
+            value.get("cut_long_pauses"),
+            value.get("pause_threshold_ms"),
+            value.get("remove_filler_words"),
+            value.get("filtered_words"),
+            value.get("sensitivity"),
+        )
+    else:
+        cleanup = renormalize_stored_cleanup_settings(value)
 
     output_format = value.get("output_format")
     from ...video_utils import VALID_OUTPUT_FORMATS
@@ -95,6 +143,11 @@ def normalize_template_settings(value: Any) -> Dict[str, Any]:
         "broll_settings": _normalize_broll_settings(value.get("broll_settings")),
         "target_duration_seconds": _normalize_target_duration(value.get("target_duration_seconds")),
         "max_clips": _normalize_max_clips(value.get("max_clips")),
+        "safe_zone_enabled_default": bool(value.get("safe_zone_enabled_default", False)),
+        "safe_zone_platform_default": _normalize_safe_zone_platform_default(
+            value.get("safe_zone_platform_default")
+        ),
+        "emoji_defaults": _normalize_emoji_defaults(value.get("emoji_defaults")),
     }
 
 
@@ -104,11 +157,23 @@ def migrate_template_settings(settings: Dict[str, Any], schema_version: int) -> 
     Version 1 is the only version that has ever existed, so this is
     currently a passthrough (re-normalized so a hand-edited/imported JSON
     file still gets whitelisted/clamped) — the extensibility point for
-    future schema bumps.
+    future schema bumps. `settings` is always a stored or stored-shaped
+    (export/import) dict here, never a fresh single-field submission, so
+    trust_sensitivity=False throughout (see normalize_template_settings).
     """
     if schema_version < 1:
-        settings = normalize_template_settings(settings)
-    return normalize_template_settings(settings)
+        settings = normalize_template_settings(settings, trust_sensitivity=False)
+    return normalize_template_settings(settings, trust_sensitivity=False)
+
+
+def _normalize_section_values(section_name: str, values: Dict[str, Any]) -> Dict[str, Any]:
+    """Run just one section's fields through the same normalizers
+    normalize_template_settings uses, discarding every other field's
+    (default-filled) output — this is what keeps a section-scoped update
+    from ever touching a different section's stored values."""
+    fields = _SETTINGS_SECTIONS[section_name]
+    full = normalize_template_settings(values)
+    return {field: full[field] for field in fields}
 
 
 def _section_count(settings: Dict[str, Any]) -> int:
@@ -157,7 +222,8 @@ async def _capture_task_settings(task_service: TaskService, task_id: str) -> Dic
             "broll_settings": metadata.get("broll_settings"),
             "target_duration_seconds": metadata.get("target_duration_seconds"),
             "max_clips": metadata.get("max_clips"),
-        }
+        },
+        trust_sensitivity=False,
     )
 
 
@@ -309,13 +375,7 @@ async def apply_template(
     else:
         effective = template_settings
 
-    cleanup_settings = normalize_clip_cleanup_settings(
-        effective.get("cut_long_pauses"),
-        effective.get("pause_threshold_ms"),
-        effective.get("remove_filler_words"),
-        effective.get("filtered_words"),
-        effective.get("sensitivity"),
-    )
+    cleanup_settings = renormalize_stored_cleanup_settings(effective)
 
     metadata = await _load_task_source_metadata(task_id)
     merged_metadata = _merge_task_source_metadata(
@@ -344,3 +404,29 @@ async def apply_template(
         cleanup_settings=cleanup_settings,
     )
     return {"task": task, "message": f"Template applied ({mode})"}
+
+
+@router.patch("/{template_id}/section/{section_name}")
+async def update_template_section(
+    template_id: str, section_name: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Write only ONE feature's fields into a stored template — every other
+    section's stored values are untouched. This is the Testing tab's
+    "Update template" mechanism: it lets a visual-feature tab persist its
+    current settings without disturbing the template's other features."""
+    if section_name not in _SETTINGS_SECTIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown section '{section_name}'")
+
+    payload = await request.json()
+    values = payload.get("values")
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=400, detail="values must be an object")
+
+    user_id = await _get_user_id_from_headers(request, db)
+    existing = await TemplateRepository.get_by_id(db, user_id, template_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    partial = _normalize_section_values(section_name, values)
+    template = await TemplateRepository.update_settings_partial(db, user_id, template_id, partial)
+    return {"template": template, "message": f"Updated '{section_name}' settings"}
