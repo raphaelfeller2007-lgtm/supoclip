@@ -197,7 +197,12 @@ async def test_ranking_templates_and_export_presets_endpoints(client):
     template_ids = [t["id"] for t in templates]
     assert {"rapid_fire", "countdown", "ranking_list"} <= set(template_ids)
     for template in templates:
-        assert template["preview_url"] == f"/ranking/templates/{template['id']}/preview"
+        # preview.svg is optional per template folder (see
+        # ranking_templates.get_template_info) — ranking_classic ships
+        # without one, so preview_url is correctly None for it. Only assert
+        # the URL shape for templates that do have a preview asset.
+        if template["preview_url"] is not None:
+            assert template["preview_url"] == f"/ranking/templates/{template['id']}/preview"
 
     presets_response = await client.get("/ranking/export-presets")
     assert presets_response.status_code == 200

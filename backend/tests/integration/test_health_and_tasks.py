@@ -71,7 +71,12 @@ def test_database_backed_file_routes_release_sessions_before_streaming(app, path
 
 
 @pytest.mark.asyncio
-async def test_list_tasks_only_returns_owned_tasks(client, db_session, auth_headers):
+async def test_list_tasks_only_returns_owned_tasks(app, client, db_session, auth_headers):
+    # Ownership only means something when auth is actually enforced — with
+    # the fixture's require_auth=False default every request resolves to the
+    # single local-first user, which is what most other tests here want, but
+    # this one is specifically testing per-user isolation.
+    app.state.config.require_auth = True
     owner = await create_user(db_session, user_id="user-1", email="owner@example.com")
     other = await create_user(db_session, user_id="user-2", email="other@example.com")
     source_one = await create_source(db_session, title="Owner source")
@@ -154,8 +159,9 @@ async def test_legacy_public_clips_mount_is_not_available(client):
 
 @pytest.mark.asyncio
 async def test_completed_task_can_be_shared_without_exposing_private_fields(
-    client, db_session, auth_headers
+    app, client, db_session, auth_headers
 ):
+    app.state.config.require_auth = True
     owner = await create_user(db_session, user_id="user-1", email="owner@example.com")
     source = await create_source(db_session, title="Shareable source")
     task = await create_task(
@@ -204,8 +210,9 @@ async def test_completed_task_can_be_shared_without_exposing_private_fields(
 
 @pytest.mark.asyncio
 async def test_shared_clip_file_requires_an_enabled_share_token(
-    client, db_session, auth_headers, tmp_path
+    app, client, db_session, auth_headers, tmp_path
 ):
+    app.state.config.require_auth = True
     owner = await create_user(db_session, user_id="user-1", email="owner@example.com")
     source = await create_source(db_session, title="Shared video")
     task = await create_task(
