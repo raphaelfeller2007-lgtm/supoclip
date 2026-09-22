@@ -60,7 +60,7 @@ interface FontOption {
 }
 
 type OutputFormat = "vertical" | "vertical_pan" | "vertical_split" | "original";
-type Tab = "source" | "style" | "hook" | "retention" | "cleanup" | "output";
+type Tab = "source" | "captions" | "hook" | "retention" | "cleanup" | "output";
 
 const MAX_VIDEO_UPLOAD_BYTES = 12_000_000_000;
 const FONT_SEARCH_THRESHOLD = 8;
@@ -157,7 +157,7 @@ async function uploadVideoFile(file: File): Promise<string> {
 
 const TABS: { id: Tab; label: string; icon: typeof Youtube }[] = [
   { id: "source", label: "Source", icon: Youtube },
-  { id: "style", label: "Style", icon: Sparkles },
+  { id: "captions", label: "Captions", icon: Sparkles },
   { id: "hook", label: "Hook", icon: Type },
   { id: "retention", label: "Retention", icon: Film },
   { id: "cleanup", label: "Cleanup", icon: Scissors },
@@ -922,8 +922,8 @@ export default function VideoProcessingPage() {
               </div>
             )}
 
-            {/* Style tab */}
-            {activeTab === "style" && (
+            {/* Captions tab */}
+            {activeTab === "captions" && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm text-muted-foreground">Caption Style</label>

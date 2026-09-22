@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/lib/toast";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
+import { copyToClipboard } from "@/lib/clipboard";
 
 interface ClipMetadataPanelProps {
   taskId: string;
@@ -38,15 +39,6 @@ const QUALITY_OPTIONS = [
   { value: "high", label: "High quality (7B)" },
   { value: "gemini", label: "Gemini" },
 ];
-
-async function copyToClipboard(text: string, label: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success(`${label} copied.`);
-  } catch {
-    toast.error(`Failed to copy ${label.toLowerCase()}.`);
-  }
-}
 
 export function ClipMetadataPanel({
   taskId,

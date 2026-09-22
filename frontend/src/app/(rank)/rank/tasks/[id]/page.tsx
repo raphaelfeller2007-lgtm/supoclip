@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/lib/toast";
+import { copyToClipboard } from "@/lib/clipboard";
 import { ArrowLeft, Copy, Download } from "lucide-react";
 
 interface RankingClip {
@@ -177,9 +178,21 @@ export default function RankingTaskPage({
 
         {task.status === "error" && (
           <div className="border border-border bg-foreground text-background p-6 space-y-3">
-            <div>
-              <p className="text-[15px] font-medium">Render failed</p>
-              <p className="text-[13px] mt-1">{task.progress_message}</p>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-[15px] font-medium">Render failed</p>
+                <p className="text-[13px] mt-1">{task.progress_message}</p>
+              </div>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="shrink-0"
+                onClick={() => copyToClipboard(task.progress_message ?? "", "Error message")}
+                disabled={!task.progress_message}
+                title="Copy error message"
+              >
+                <Copy className="size-3.5" />
+              </Button>
             </div>
             <Button variant="outline" onClick={() => void handleDuplicate()} disabled={isDuplicating}>
               <Copy className="w-4 h-4" />
