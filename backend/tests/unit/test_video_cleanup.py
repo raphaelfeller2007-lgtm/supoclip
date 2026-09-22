@@ -211,16 +211,19 @@ def test_get_words_for_keep_ranges_retimes_words_into_output_timeline():
             {"text": "third", "start": 1300, "end": 1600},
         ]
     }
+    keep_ranges = [(0.0, 0.3), (1.0, 1.6)]
 
-    words = get_words_for_keep_ranges(
-        transcript_data,
-        [(0.0, 0.3), (1.0, 1.6)],
-    )
+    words = get_words_for_keep_ranges(transcript_data, keep_ranges)
 
+    # The one junction between the two ranges is crossfaded (see
+    # crossfade_fades_for_ranges), which shortens the output timeline by the
+    # fade duration from the second range onward — word offsets must track
+    # that same shortening to stay locked to the spoken audio.
+    (fade,) = crossfade_fades_for_ranges(keep_ranges)
     assert [word["text"] for word in words] == ["first", "second", "third"]
     assert [word["confidence"] for word in words] == [1.0, 1.0, 1.0]
-    assert [word["start"] for word in words] == pytest.approx([0.0, 0.3, 0.6])
-    assert [word["end"] for word in words] == pytest.approx([0.3, 0.6, 0.9])
+    assert [word["start"] for word in words] == pytest.approx([0.0, 0.3 - fade, 0.6 - fade])
+    assert [word["end"] for word in words] == pytest.approx([0.3, 0.6 - fade, 0.9 - fade])
 
 
 def test_build_keep_ranges_from_source_ranges_recomputes_each_range(monkeypatch):
