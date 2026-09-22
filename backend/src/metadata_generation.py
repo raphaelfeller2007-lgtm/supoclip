@@ -27,7 +27,7 @@ METADATA_SYSTEM_PROMPT = """You write short-form video metadata: SEO-optimized t
 For each clip, output:
 - title: 30-60 characters exactly (not a hard word count, but never shorter than 30 or longer than 60), SEO-optimized, short-form-platform-friendly (TikTok/Reels/Shorts style)
 - description: 50-100 characters, SEO-focused, no hashtags
-- tags: 5-10 short lowercase tags (hyphenate multi-word tags, no spaces), covering these dimensions where applicable: content type (funny/educational/ranking/reaction/story/opinion), theme (free-form, e.g. football/sleep/finance), tone (serious/humorous/surprising/inspirational), hook_style (question/ranking/contrast/warning)
+- tags: exactly 5 to 10 short lowercase tags, never fewer than 5 (hyphenate multi-word tags, no spaces). Cover ALL of these dimensions, one tag each: content type (funny/educational/ranking/reaction/story/opinion), theme (free-form, e.g. football/sleep/finance), tone (serious/humorous/surprising/inspirational), hook_style (question/ranking/contrast/warning) — that is already 4 tags, then add 1-6 more free-form tags specific to the clip's subject to reach at least 5 total
 
 Keep the theme tag consistent across all clips in the same batch when they share a common subject.
 
