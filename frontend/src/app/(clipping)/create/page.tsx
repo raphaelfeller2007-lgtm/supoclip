@@ -60,7 +60,7 @@ interface FontOption {
 }
 
 type OutputFormat = "vertical" | "vertical_pan" | "vertical_split" | "original";
-type Tab = "source" | "captions" | "hook" | "retention" | "cleanup" | "output";
+type Tab = "source" | "captions" | "hook" | "engagement" | "cleanup" | "output";
 
 const MAX_VIDEO_UPLOAD_BYTES = 12_000_000_000;
 const FONT_SEARCH_THRESHOLD = 8;
@@ -159,7 +159,7 @@ const TABS: { id: Tab; label: string; icon: typeof Youtube }[] = [
   { id: "source", label: "Source", icon: Youtube },
   { id: "captions", label: "Captions", icon: Sparkles },
   { id: "hook", label: "Hook", icon: Type },
-  { id: "retention", label: "Retention", icon: Film },
+  { id: "engagement", label: "Engagement", icon: Film },
   { id: "cleanup", label: "Cleanup", icon: Scissors },
   { id: "output", label: "Output", icon: Monitor },
 ];
@@ -1265,8 +1265,8 @@ export default function VideoProcessingPage() {
               </div>
             )}
 
-            {/* Retention tab */}
-            {activeTab === "retention" && (
+            {/* Engagement tab */}
+            {activeTab === "engagement" && (
               <div className="space-y-5">
                 <div className="border border-border bg-background p-3 space-y-3">
                   <div className="flex items-center justify-between">
@@ -1348,6 +1348,121 @@ export default function VideoProcessingPage() {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* Cleanup tab */}
+            {activeTab === "cleanup" && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setCleanupSensitivity(cleanupSensitivity ?? 50)}
+                    disabled={isLoading}
+                    className={`px-2 py-1.5 text-xs font-medium border transition-colors ${
+                      cleanupSensitivity !== null ? "bg-foreground text-background border-foreground" : "bg-background text-muted-foreground border-border hover:text-foreground"
+                    }`}
+                  >
+                    Auto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCleanupSensitivity(null)}
+                    disabled={isLoading}
+                    className={`px-2 py-1.5 text-xs font-medium border transition-colors ${
+                      cleanupSensitivity === null ? "bg-foreground text-background border-foreground" : "bg-background text-muted-foreground border-border hover:text-foreground"
+                    }`}
+                  >
+                    Manual
+                  </button>
+                </div>
+
+                {cleanupSensitivity !== null ? (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-foreground">Cleanup sensitivity</label>
+                      <span className="text-xs text-muted-foreground tabular-nums">{cleanupSensitivity}/100</span>
+                    </div>
+                    <Slider
+                      value={[cleanupSensitivity]}
+                      min={0}
+                      max={100}
+                      step={1}
+                      disabled={isLoading}
+                      onValueChange={([value]) => setCleanupSensitivity(value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Higher values cut shorter pauses and more filler words at once. Meaning-changing
+                      cuts (punchlines, sentence-ending words, emphatic delivery) are always protected
+                      regardless of sensitivity.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-foreground">Cut long pauses</div>
+                        <div className="text-xs text-muted-foreground">Split out silence gaps longer than your threshold.</div>
+                      </div>
+                      <Switch checked={cutLongPauses} onCheckedChange={setCutLongPauses} disabled={isLoading} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">Pause threshold (ms)</label>
+                      <Input
+                        type="number"
+                        min={250}
+                        max={3000}
+                        step={50}
+                        value={pauseThresholdMs}
+                        onChange={(e) => setPauseThresholdMs(e.target.value)}
+                        disabled={isLoading || !cutLongPauses}
+                        placeholder="900"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-foreground">Remove filler words</div>
+                        <div className="text-xs text-muted-foreground">Uses a safe default list like &quot;um&quot;, &quot;uh&quot;, and &quot;you know&quot;.</div>
+                      </div>
+                      <Switch checked={removeFillerWords} onCheckedChange={setRemoveFillerWords} disabled={isLoading} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground">Extra filtered words or phrases</label>
+                      <Input
+                        value={filteredWords}
+                        onChange={(e) => setFilteredWords(e.target.value)}
+                        disabled={isLoading}
+                        placeholder="basically, literally, to be honest"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Output tab */}
+            {activeTab === "output" && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-4 p-3 border rounded-lg bg-background">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Monitor className="w-4 h-4 text-secondary" />
+                    <div>
+                      <h3 className="text-sm font-medium text-foreground">Framing</h3>
+                      <p className="text-xs text-muted-foreground">Choose how clips are reframed for social video</p>
+                    </div>
+                  </div>
+                  <Select value={outputFormat} onValueChange={(value) => setOutputFormat(value as OutputFormat)} disabled={isLoading}>
+                    <SelectTrigger className="w-[180px] bg-background">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="vertical">Auto 9:16</SelectItem>
+                      <SelectItem value="vertical_pan">Speaker pan</SelectItem>
+                      <SelectItem value="vertical_split">Split-screen</SelectItem>
+                      <SelectItem value="original">Original</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
                 <div className="space-y-2">
                   <label className="text-sm text-muted-foreground">Target clip length</label>
@@ -1387,106 +1502,6 @@ export default function VideoProcessingPage() {
                     ))}
                   </div>
                   <p className="text-xs text-muted-foreground">How many clips the AI aims to produce from this video (quality still gates each pick).</p>
-                </div>
-              </div>
-            )}
-
-            {/* Cleanup tab */}
-            {activeTab === "cleanup" && (
-              <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-foreground">Cleanup sensitivity</label>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {cleanupSensitivity === null ? "Off" : `${cleanupSensitivity}/100`}
-                    </span>
-                  </div>
-                  <Slider
-                    value={[cleanupSensitivity ?? 0]}
-                    min={0}
-                    max={100}
-                    step={1}
-                    disabled={isLoading}
-                    onValueChange={([value]) => setCleanupSensitivity(value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    0 turns cleanup off. Higher values cut shorter pauses and more filler words at once
-                    &mdash; this overrides the manual controls below. Meaning-changing cuts (punchlines,
-                    sentence-ending words, emphatic delivery) are always protected regardless of sensitivity.
-                  </p>
-                  {cleanupSensitivity !== null && (
-                    <button
-                      type="button"
-                      onClick={() => setCleanupSensitivity(null)}
-                      disabled={isLoading}
-                      className="text-xs text-muted-foreground underline hover:text-foreground"
-                    >
-                      Reset to manual controls
-                    </button>
-                  )}
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-medium text-foreground">Cut long pauses</div>
-                    <div className="text-xs text-muted-foreground">Split out silence gaps longer than your threshold.</div>
-                  </div>
-                  <Switch checked={cutLongPauses} onCheckedChange={setCutLongPauses} disabled={isLoading || cleanupSensitivity !== null} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Pause threshold (ms)</label>
-                  <Input
-                    type="number"
-                    min={250}
-                    max={3000}
-                    step={50}
-                    value={pauseThresholdMs}
-                    onChange={(e) => setPauseThresholdMs(e.target.value)}
-                    disabled={isLoading || !cutLongPauses || cleanupSensitivity !== null}
-                    placeholder="900"
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-medium text-foreground">Remove filler words</div>
-                    <div className="text-xs text-muted-foreground">Uses a safe default list like &quot;um&quot;, &quot;uh&quot;, and &quot;you know&quot;.</div>
-                  </div>
-                  <Switch checked={removeFillerWords} onCheckedChange={setRemoveFillerWords} disabled={isLoading || cleanupSensitivity !== null} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Extra filtered words or phrases</label>
-                  <Input
-                    value={filteredWords}
-                    onChange={(e) => setFilteredWords(e.target.value)}
-                    disabled={isLoading}
-                    placeholder="basically, literally, to be honest"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Output tab */}
-            {activeTab === "output" && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between gap-4 p-3 border rounded-lg bg-background">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <Monitor className="w-4 h-4 text-secondary" />
-                    <div>
-                      <h3 className="text-sm font-medium text-foreground">Framing</h3>
-                      <p className="text-xs text-muted-foreground">Choose how clips are reframed for social video</p>
-                    </div>
-                  </div>
-                  <Select value={outputFormat} onValueChange={(value) => setOutputFormat(value as OutputFormat)} disabled={isLoading}>
-                    <SelectTrigger className="w-[180px] bg-background">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="vertical">Auto 9:16</SelectItem>
-                      <SelectItem value="vertical_pan">Speaker pan</SelectItem>
-                      <SelectItem value="vertical_split">Split-screen</SelectItem>
-                      <SelectItem value="original">Original</SelectItem>
-                    </SelectContent>
-                  </Select>
                 </div>
               </div>
             )}

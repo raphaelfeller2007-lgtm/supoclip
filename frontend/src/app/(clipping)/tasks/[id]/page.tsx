@@ -33,7 +33,14 @@ import { useDebouncedEffect } from "@/lib/use-debounced-effect";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
 import { buildFontOptionsPayload } from "@/lib/font-options";
 import { DEFAULT_HOOK_STYLE, hookStylePayload, type HookStyle, type HookTitleVariant } from "@/lib/hook-style";
-import { DEFAULT_SOCIAL_OVERLAY, socialOverlayPayload, type SocialOverlay } from "@/lib/retention-settings";
+import {
+  DEFAULT_BROLL_SETTINGS,
+  DEFAULT_SOCIAL_OVERLAY,
+  brollSettingsPayload,
+  socialOverlayPayload,
+  type BrollSettings,
+  type SocialOverlay,
+} from "@/lib/retention-settings";
 import { HookVariantCompare } from "@/components/hook-variant-compare";
 import { ContentPolicyProjectPanel } from "@/components/editor/content-policy-project-panel";
 import { ClipMetadataPanel } from "@/components/editor/clip-metadata-panel";
@@ -43,6 +50,7 @@ import { CaptionStylePanel } from "@/components/settings-panels/caption-style-pa
 import { FillerCutPanel } from "@/components/settings-panels/filler-cut-panel";
 import { SafeZoneSettingsPanel } from "@/components/settings-panels/safe-zone-settings-panel";
 import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
 import { SafeZoneOverlay } from "@/components/safe-zone-overlay";
 import {
@@ -238,10 +246,16 @@ export default function TaskPage() {
   const [projectPauseThresholdMs, setProjectPauseThresholdMs] = useState("900");
   const [projectRemoveFillerWords, setProjectRemoveFillerWords] = useState(false);
   const [projectFilteredWords, setProjectFilteredWords] = useState("");
+  // null = manual controls above (mirrors the create form's contract).
+  const [projectCleanupSensitivity, setProjectCleanupSensitivity] = useState<number | null>(null);
   const [projectHookStyle, setProjectHookStyle] = useState<HookStyle>(DEFAULT_HOOK_STYLE);
   const [projectSocialOverlay, setProjectSocialOverlay] = useState<SocialOverlay>(DEFAULT_SOCIAL_OVERLAY);
   const updateProjectSocialOverlay = useCallback(<K extends keyof SocialOverlay>(key: K, value: SocialOverlay[K]) => {
     setProjectSocialOverlay((current) => ({ ...current, [key]: value }));
+  }, []);
+  const [projectBrollSettings, setProjectBrollSettings] = useState<BrollSettings>(DEFAULT_BROLL_SETTINGS);
+  const updateProjectBrollSettings = useCallback(<K extends keyof BrollSettings>(key: K, value: BrollSettings[K]) => {
+    setProjectBrollSettings((current) => ({ ...current, [key]: value }));
   }, []);
   const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   const [regeneratingHookClipId, setRegeneratingHookClipId] = useState<string | null>(null);
@@ -320,6 +334,8 @@ export default function TaskPage() {
           projectFilteredWords: (taskData.filtered_words || []).join(", "),
           projectHookStyle: { ...DEFAULT_HOOK_STYLE, ...(taskData.hook_style || {}) },
           projectSocialOverlay: { ...DEFAULT_SOCIAL_OVERLAY, ...(taskData.social_overlay || {}) },
+          projectBrollSettings: { ...DEFAULT_BROLL_SETTINGS, ...(taskData.broll_settings || {}) },
+          projectCleanupSensitivity: null as number | null,
         };
         setProjectFontFamily(loadedSettings.projectFontFamily);
         setProjectFontSize(loadedSettings.projectFontSize);
@@ -329,6 +345,14 @@ export default function TaskPage() {
         setProjectPauseThresholdMs(loadedSettings.projectPauseThresholdMs);
         setProjectRemoveFillerWords(loadedSettings.projectRemoveFillerWords);
         setProjectFilteredWords(loadedSettings.projectFilteredWords);
+        // The backend always echoes a derived sensitivity value alongside the
+        // concrete cut_long_pauses/pause_threshold_ms/remove_filler_words
+        // fields (see clip_cleanup.py::renormalize_stored_cleanup_settings),
+        // so it can't tell us whether Auto or Manual mode produced the
+        // stored values. Default to Manual (the concrete fields loaded
+        // above are accurate either way); the user can switch to Auto again.
+        setProjectCleanupSensitivity(null);
+        setProjectBrollSettings(loadedSettings.projectBrollSettings);
         setProjectHookStyle(loadedSettings.projectHookStyle);
         setProjectSocialOverlay(loadedSettings.projectSocialOverlay);
         // Mark this as the "already saved" baseline so the auto-save effect
@@ -840,8 +864,11 @@ export default function TaskPage() {
           pause_threshold_ms: safePauseThreshold,
           remove_filler_words: projectRemoveFillerWords,
           filtered_words: normalizedFilteredWords,
+          ...(projectCleanupSensitivity !== null ? { sensitivity: projectCleanupSensitivity } : {}),
           hook_style: hookStylePayload(projectHookStyle),
           social_overlay: socialOverlayPayload(projectSocialOverlay),
+          broll_settings: brollSettingsPayload(projectBrollSettings),
+          include_broll: projectBrollSettings.enabled,
           apply_to_existing: applyToExisting,
         }),
       });
@@ -853,7 +880,8 @@ export default function TaskPage() {
     [
       session?.user?.id, params.id, taskApiUrl, projectFontFamily, projectFontSize, projectFontColor,
       projectPauseThresholdMs, projectFilteredWords, projectCaptionTemplate, projectCutLongPauses,
-      projectRemoveFillerWords, projectHookStyle, projectSocialOverlay, buildSupportError, fetchTaskStatus,
+      projectRemoveFillerWords, projectCleanupSensitivity, projectHookStyle, projectSocialOverlay,
+      projectBrollSettings, buildSupportError, fetchTaskStatus,
     ],
   );
 
@@ -966,7 +994,7 @@ export default function TaskPage() {
       const snapshot = JSON.stringify({
         projectFontFamily, projectFontSize, projectFontColor, projectCaptionTemplate,
         projectCutLongPauses, projectPauseThresholdMs, projectRemoveFillerWords, projectFilteredWords,
-        projectHookStyle, projectSocialOverlay,
+        projectHookStyle, projectSocialOverlay, projectBrollSettings, projectCleanupSensitivity,
       });
       // fetchTaskStatus (SSE events, other edits) reloads these same states
       // from the server — skip re-saving when nothing actually changed.
@@ -983,7 +1011,7 @@ export default function TaskPage() {
     [
       projectFontFamily, projectFontSize, projectFontColor, projectCaptionTemplate,
       projectCutLongPauses, projectPauseThresholdMs, projectRemoveFillerWords, projectFilteredWords,
-      projectHookStyle, projectSocialOverlay,
+      projectHookStyle, projectSocialOverlay, projectBrollSettings, projectCleanupSensitivity,
     ],
     1000,
   );
@@ -1434,14 +1462,6 @@ export default function TaskPage() {
                   </Button>
                 )}
                 {task.status === "completed" && clips.length > 0 && (
-                  <SafeZoneSettingsPanel
-                    enabled={safeZonesEnabled}
-                    platform={safeZonePlatform}
-                    onEnabledChange={setSafeZonesEnabled}
-                    onPlatformChange={setSafeZonePlatform}
-                  />
-                )}
-                {task.status === "completed" && clips.length > 0 && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -1752,70 +1772,181 @@ export default function TaskPage() {
                     Project Settings
                   </SheetTitle>
                   <SheetDescription>
-                    Configure font, caption, and cleanup settings for this task&apos;s clips.
+                    Configure captions, hook, engagement, cleanup, and safe zones for this task&apos;s clips.
                   </SheetDescription>
                 </SheetHeader>
 
                 <div className="space-y-5 px-4">
-                  <CaptionStylePanel
-                    fontFamily={projectFontFamily}
-                    fontSize={projectFontSize}
-                    fontColor={projectFontColor}
-                    captionTemplate={projectCaptionTemplate}
-                    onFontFamilyChange={setProjectFontFamily}
-                    onFontSizeChange={setProjectFontSize}
-                    onFontColorChange={setProjectFontColor}
-                    onCaptionTemplateChange={setProjectCaptionTemplate}
-                    availableFonts={availableFonts}
-                    availableTemplates={availableTemplates}
-                    deletingFontName={deletingFontName}
-                    onDeleteFont={handleDeleteFont}
-                  />
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-medium text-foreground">Captions</h4>
+                    <CaptionStylePanel
+                      fontFamily={projectFontFamily}
+                      fontSize={projectFontSize}
+                      fontColor={projectFontColor}
+                      captionTemplate={projectCaptionTemplate}
+                      onFontFamilyChange={setProjectFontFamily}
+                      onFontSizeChange={setProjectFontSize}
+                      onFontColorChange={setProjectFontColor}
+                      onCaptionTemplateChange={setProjectCaptionTemplate}
+                      availableFonts={availableFonts}
+                      availableTemplates={availableTemplates}
+                      deletingFontName={deletingFontName}
+                      onDeleteFont={handleDeleteFont}
+                    />
+                  </div>
 
-                  <HookStylePanel
-                    style={projectHookStyle}
-                    onChange={setProjectHookStyle}
-                    captionTemplate={projectCaptionTemplate}
-                    availableTemplates={availableTemplates}
-                  />
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-medium text-foreground">Hook</h4>
+                    <HookStylePanel
+                      style={projectHookStyle}
+                      onChange={setProjectHookStyle}
+                      captionTemplate={projectCaptionTemplate}
+                      availableTemplates={availableTemplates}
+                    />
+                  </div>
 
-                  <div className="border border-border p-3 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">Fake social overlay</div>
-                        <div className="text-xs text-muted-foreground">Username, verified badge, like/comment counts.</div>
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-medium text-foreground">Engagement</h4>
+                    <div className="border border-border p-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-medium text-foreground">Fake social overlay</div>
+                          <div className="text-xs text-muted-foreground">Username, verified badge, like/comment counts.</div>
+                        </div>
+                        <Switch
+                          checked={projectSocialOverlay.enabled}
+                          onCheckedChange={(checked) => updateProjectSocialOverlay("enabled", checked)}
+                        />
                       </div>
-                      <Switch
-                        checked={projectSocialOverlay.enabled}
-                        onCheckedChange={(checked) => updateProjectSocialOverlay("enabled", checked)}
-                      />
+                      {projectSocialOverlay.enabled && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <Input
+                            placeholder="Username"
+                            value={projectSocialOverlay.username}
+                            onChange={(e) => updateProjectSocialOverlay("username", e.target.value)}
+                          />
+                          <Input
+                            placeholder="Likes (24.5K)"
+                            value={projectSocialOverlay.likes}
+                            onChange={(e) => updateProjectSocialOverlay("likes", e.target.value)}
+                          />
+                        </div>
+                      )}
                     </div>
-                    {projectSocialOverlay.enabled && (
-                      <div className="grid grid-cols-2 gap-2">
-                        <Input
-                          placeholder="Username"
-                          value={projectSocialOverlay.username}
-                          onChange={(e) => updateProjectSocialOverlay("username", e.target.value)}
-                        />
-                        <Input
-                          placeholder="Likes (24.5K)"
-                          value={projectSocialOverlay.likes}
-                          onChange={(e) => updateProjectSocialOverlay("likes", e.target.value)}
+
+                    <div className="border border-border p-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-medium text-foreground">B-roll cuts</div>
+                          <div className="text-xs text-muted-foreground">Let the AI suggest B-roll insertion points from stock footage.</div>
+                        </div>
+                        <Switch
+                          checked={projectBrollSettings.enabled}
+                          onCheckedChange={(checked) => updateProjectBrollSettings("enabled", checked)}
                         />
                       </div>
+                      {projectBrollSettings.enabled && (
+                        <div className="space-y-3">
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
+                              <span>Max insertions per clip</span>
+                              <span>{projectBrollSettings.maxInsertions}</span>
+                            </label>
+                            <input
+                              type="range"
+                              min={1}
+                              max={6}
+                              step={1}
+                              value={projectBrollSettings.maxInsertions}
+                              onChange={(e) => updateProjectBrollSettings("maxInsertions", Number(e.target.value))}
+                              className="w-full"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
+                              <span>Minimum gap between insertions</span>
+                              <span>{projectBrollSettings.minGapSeconds}s</span>
+                            </label>
+                            <input
+                              type="range"
+                              min={2}
+                              max={30}
+                              step={1}
+                              value={projectBrollSettings.minGapSeconds}
+                              onChange={(e) => updateProjectBrollSettings("minGapSeconds", Number(e.target.value))}
+                              className="w-full"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-medium text-foreground">Cleanup</h4>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setProjectCleanupSensitivity(projectCleanupSensitivity ?? 50)}
+                        className={`px-2 py-1.5 text-xs font-medium border transition-colors ${
+                          projectCleanupSensitivity !== null ? "bg-foreground text-background border-foreground" : "bg-background text-muted-foreground border-border hover:text-foreground"
+                        }`}
+                      >
+                        Auto
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProjectCleanupSensitivity(null)}
+                        className={`px-2 py-1.5 text-xs font-medium border transition-colors ${
+                          projectCleanupSensitivity === null ? "bg-foreground text-background border-foreground" : "bg-background text-muted-foreground border-border hover:text-foreground"
+                        }`}
+                      >
+                        Manual
+                      </button>
+                    </div>
+                    {projectCleanupSensitivity !== null ? (
+                      <div className="border border-border p-3 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-sm font-medium text-foreground">Cleanup sensitivity</label>
+                          <span className="text-xs text-muted-foreground tabular-nums">{projectCleanupSensitivity}/100</span>
+                        </div>
+                        <Slider
+                          value={[projectCleanupSensitivity]}
+                          min={0}
+                          max={100}
+                          step={1}
+                          onValueChange={([value]) => setProjectCleanupSensitivity(value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Higher values cut shorter pauses and more filler words at once. Meaning-changing
+                          cuts are always protected regardless of sensitivity.
+                        </p>
+                      </div>
+                    ) : (
+                      <FillerCutPanel
+                        cutLongPauses={projectCutLongPauses}
+                        pauseThresholdMs={projectPauseThresholdMs}
+                        removeFillerWords={projectRemoveFillerWords}
+                        filteredWords={projectFilteredWords}
+                        onCutLongPausesChange={setProjectCutLongPauses}
+                        onPauseThresholdMsChange={setProjectPauseThresholdMs}
+                        onRemoveFillerWordsChange={setProjectRemoveFillerWords}
+                        onFilteredWordsChange={setProjectFilteredWords}
+                      />
                     )}
                   </div>
 
-                  <FillerCutPanel
-                    cutLongPauses={projectCutLongPauses}
-                    pauseThresholdMs={projectPauseThresholdMs}
-                    removeFillerWords={projectRemoveFillerWords}
-                    filteredWords={projectFilteredWords}
-                    onCutLongPausesChange={setProjectCutLongPauses}
-                    onPauseThresholdMsChange={setProjectPauseThresholdMs}
-                    onRemoveFillerWordsChange={setProjectRemoveFillerWords}
-                    onFilteredWordsChange={setProjectFilteredWords}
-                  />
+                  {task.status === "completed" && clips.length > 0 && (
+                    <div className="space-y-3">
+                      <h4 className="text-sm font-medium text-foreground">Safe Zones</h4>
+                      <SafeZoneSettingsPanel
+                        enabled={safeZonesEnabled}
+                        platform={safeZonePlatform}
+                        onEnabledChange={setSafeZonesEnabled}
+                        onPlatformChange={setSafeZonePlatform}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <Separator className="my-2" />
@@ -1881,7 +2012,8 @@ export default function TaskPage() {
                   </Link>
                 </div>
 
-                <div className="px-4 pt-2">
+                <div className="px-4 pt-2 space-y-3">
+                  <h4 className="text-sm font-medium text-foreground">Content Policy</h4>
                   <ContentPolicyProjectPanel taskId={task.id} />
                 </div>
 
