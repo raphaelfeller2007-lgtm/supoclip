@@ -170,6 +170,7 @@ interface TaskDetails {
   status: string;
   progress?: number;
   progress_message?: string;
+  error_code?: string;
   clips_count: number;
   created_at: string;
   updated_at: string;
@@ -1670,7 +1671,9 @@ export default function TaskPage() {
                 <AlertCircle className="w-12 h-12 mx-auto mb-2" />
                 <h2 className="text-xl font-semibold">Processing Failed</h2>
               </div>
-              <p className="text-muted-foreground mb-4">There was an error processing your video. Please try again.</p>
+              <p className="text-muted-foreground mb-4">
+                {task.progress_message || progressMessage || "There was an error processing your video. Please try again."}
+              </p>
               <Link href="/">
                 <Button>
                   <ArrowLeft className="w-4 h-4" />
