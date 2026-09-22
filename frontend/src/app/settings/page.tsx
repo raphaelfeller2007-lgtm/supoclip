@@ -15,7 +15,7 @@ import { LOCAL_USER_ID } from "@/lib/local-user";
 import { formatBillingPlanName, getPublicBillingPlans, isPaidBillingPlan, type BillingPlanId } from "@/lib/billing-plans";
 import { track } from "@/lib/datafast";
 import Link from "next/link";
-import { Type, Palette, CheckCircle, AlertCircle, Settings, ArrowLeft, Mail, KeyRound, ChevronRight, Mic, Music, SlidersHorizontal, Download, LayoutTemplate, ShieldAlert, Sparkles, ListOrdered } from "lucide-react";
+import { Type, Palette, CheckCircle, AlertCircle, Settings, ArrowLeft, Mail, KeyRound, ChevronRight, Mic, Music, SlidersHorizontal, Download, LayoutTemplate, ShieldAlert, Sparkles, ListOrdered, FlaskConical } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { RuntimeSettingsForm, type RuntimeSetting } from "@/components/admin/runtime-settings-form";
 import { LlmConnectionTest } from "@/components/settings/llm-connection-test";
@@ -92,6 +92,8 @@ export default function SettingsPage() {
   const [sfxError, setSfxError] = useState<string | null>(null);
   const [isUploadingRankingSfx, setIsUploadingRankingSfx] = useState(false);
   const rankingSfxInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploadingDefaultClip, setIsUploadingDefaultClip] = useState(false);
+  const defaultClipInputRef = useRef<HTMLInputElement | null>(null);
   // Local-first: no login, so there's no real session — every user_id-shaped
   // value downstream just resolves to the single implicit local user.
   const session = { user: { id: LOCAL_USER_ID, name: "Local User", email: "", image: null as string | null } };
@@ -240,6 +242,28 @@ export default function SettingsPage() {
     }
   };
 
+  const handleDefaultClipUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setIsUploadingDefaultClip(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/testing/default-clip", { method: "POST", body: formData });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.detail || "Failed to upload clip");
+      }
+      toast.success("Default test clip updated.");
+      await loadRuntimeSettings();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to upload clip");
+    } finally {
+      setIsUploadingDefaultClip(false);
+    }
+  };
+
   useEffect(() => {
     const loadSfx = async () => {
       try {
@@ -267,13 +291,16 @@ export default function SettingsPage() {
   const rankingSettings = runtimeSettings.filter((setting) => RANKING_SETTING_KEYS.has(setting.key));
   const rankingSfxFilename = runtimeSettings.find((setting) => setting.key === "RANKING_SFX_FILENAME")
     ?.current_value;
+  const defaultClipFilename = runtimeSettings.find((setting) => setting.key === "TEST_DEFAULT_CLIP_FILENAME")
+    ?.current_value;
   const advancedSettings = runtimeSettings.filter(
     (setting) =>
       !TRANSCRIPTION_SETTING_KEYS.has(setting.key) &&
       !EXPORT_SETTING_KEYS.has(setting.key) &&
       !LLM_PROVIDER_SETTING_KEYS.has(setting.key) &&
       !RANKING_SETTING_KEYS.has(setting.key) &&
-      setting.key !== "RANKING_SFX_FILENAME",
+      setting.key !== "RANKING_SFX_FILENAME" &&
+      setting.key !== "TEST_DEFAULT_CLIP_FILENAME",
   );
 
   const handleBillingAction = async (selectedPlan?: BillingPlanId) => {
@@ -830,6 +857,48 @@ export default function SettingsPage() {
                 </div>
               </Link>
             </div>
+
+            {process.env.NEXT_PUBLIC_ENABLE_TESTING_TOOL === "true" && (
+              <>
+                <Separator />
+                {/* Testing Section — dev-only, mirrors the Testing tab's own gate */}
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground mb-1 flex items-center gap-2">
+                      <FlaskConical className="w-4 h-4" />
+                      Testing
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      The clip every visual-feature tab in the Testing tab previews against by default. Each tab can
+                      also use a different clip for just that one test.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background px-4 py-4 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Default test clip</p>
+                      <p className="text-xs text-muted-foreground">
+                        {defaultClipFilename ? defaultClipFilename : "No clip set yet."}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={isUploadingDefaultClip}
+                      onClick={() => defaultClipInputRef.current?.click()}
+                    >
+                      {isUploadingDefaultClip ? "Uploading…" : defaultClipFilename ? "Replace" : "Upload"}
+                    </Button>
+                    <input
+                      ref={defaultClipInputRef}
+                      type="file"
+                      accept="video/mp4,video/quicktime,video/x-matroska,video/webm,.mp4,.mov,.mkv,.webm"
+                      className="hidden"
+                      onChange={handleDefaultClipUpload}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
 
             <Separator className="mb-4" />
 

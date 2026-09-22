@@ -144,6 +144,12 @@ SETTING_METADATA = {
         "input_type": "select",
         "options": ["blur_fill", "crop_fill", "letterbox"],
     },
+    "TEST_DEFAULT_CLIP_FILENAME": {
+        "label": "Default test clip",
+        "description": "Filename of the clip the Testing tab's visual-feature previews render "
+        "against. Set by uploading a file in Settings -> Testing; empty until one is uploaded.",
+        "input_type": "text",
+    },
     "LLM_PROVIDER_MODE": {
         "label": "Local LLM provider mode",
         "description": "Ollama (local) is always tried first for content-policy/metadata features. "

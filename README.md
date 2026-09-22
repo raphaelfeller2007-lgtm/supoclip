@@ -149,14 +149,16 @@ make test
 
 ### Testing Tab (dev only)
 
-An isolated pipeline-stage runner, for developers working on SupoClip itself — not part of the end-user product. It lets you run any single pipeline stage (transcribe, detect clips, generate metadata, render, …) on its own, without running the whole pipeline, so you can iterate on one stage without re-paying for transcription or LLM calls on every change.
+A dev tool for iterating on one SupoClip feature at a time, without running the whole pipeline — not part of the end-user product. It has two modes, picked automatically per sub-tab: LLM/data stages (transcribe, detect clips, metadata, policy, and other JSON-shaped stages) get a fixture/stub/real runner; visual features (hook, captions, emoji, safe zones, filler cuts, ranking bounce/SFX) get a live preview instead — pick a template, tweak the real settings panel, re-render a test clip, and see the result play in the browser.
 
 - **Off by default.** Set `ENABLE_TESTING_TOOL=true` (backend/worker) and `NEXT_PUBLIC_ENABLE_TESTING_TOOL=true` (frontend), then restart, to see the "Testing" tab.
-- **Stub-first.** Every LLM/API-calling stage defaults to canned fixture data — zero network calls, zero cost. Flip a stage to "Real" mode to actually call AssemblyAI/Ollama/Gemini; the tab shows a cost estimate before you do.
-- **Fixtures** live in [`test-fixtures/`](test-fixtures/), pre-seeded so the tab works out of the box; save any run's input/output as a new fixture with one click.
-- **Prior real runs** get cached (see `TEST_ARTIFACT_CACHE_ENABLED`) so you can replay real data through a stage without re-running the pipeline.
+- **LLM stages are stub-first.** Every LLM/API-calling stage defaults to canned fixture data — zero network calls, zero cost. Flip a stage to "Real" mode to actually call AssemblyAI/Ollama/Gemini; the tab shows a cost estimate before you do.
+- **Visual features never call an LLM or transcription API.** They render against a "default test clip" you upload once in Settings → Testing (or a one-off clip for just one tab) — captions use a placeholder sentence with even timing so styling is testable on any clip, with zero setup.
+- **"Update template"** on a visual-feature tab writes only that one feature's settings into the template you picked, leaving everything else in it untouched.
+- **Fixtures** live in [`test-fixtures/`](test-fixtures/), pre-seeded so the tab works out of the box; save any LLM-stage run's input/output as a new fixture with one click.
+- **Prior real runs** get cached (see `TEST_ARTIFACT_CACHE_ENABLED`) so you can replay real data through an LLM stage without re-running the pipeline.
 
-Full details (fixture format, cache layout, how to add a stage) are in [CLAUDE.md](CLAUDE.md#testing-tab).
+Full details (fixture format, cache layout, how to add a stage or a visual feature) are in [CLAUDE.md](CLAUDE.md#testing-tab).
 
 ## License
 

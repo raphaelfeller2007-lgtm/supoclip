@@ -103,6 +103,34 @@ class TemplateRepository:
         return await TemplateRepository.get_by_id(db, user_id, template_id)
 
     @staticmethod
+    async def update_settings_partial(
+        db: AsyncSession, user_id: str, template_id: str, partial: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Merge `partial` onto a template's stored settings, leaving every
+        other key untouched — the mechanism behind "Update template" only
+        writing back the one feature currently being edited."""
+        current = await TemplateRepository.get_by_id(db, user_id, template_id)
+        if not current:
+            return None
+        merged_settings = {**current["settings"], **partial}
+        await db.execute(
+            text(
+                """
+                UPDATE project_templates
+                SET settings = :settings, updated_at = NOW()
+                WHERE id = :id AND user_id = :user_id
+                """
+            ),
+            {
+                "id": template_id,
+                "user_id": user_id,
+                "settings": json.dumps(merged_settings),
+            },
+        )
+        await db.commit()
+        return await TemplateRepository.get_by_id(db, user_id, template_id)
+
+    @staticmethod
     async def delete(db: AsyncSession, user_id: str, template_id: str) -> bool:
         result = await db.execute(
             text(

@@ -100,6 +100,22 @@ export function StageRunnerPanel({ stage }: { stage: StageSpec }) {
     })();
   }, [stage]);
 
+  // Manual mode still benefits from a real example instead of a blank "{}"
+  // — pull the first fixture's input as a starting point once fixtures load.
+  useEffect(() => {
+    if (inputSource !== "manual" || inputText !== "{}" || fixtures.length === 0) return;
+    (async () => {
+      try {
+        const response = await fetch(`/api/testing/fixtures/${stage.tool}/${stage.id}/${fixtures[0].name}`);
+        if (!response.ok) return;
+        const data = await response.json();
+        setInputText(JSON.stringify(data.input ?? {}, null, 2));
+      } catch {
+        // manual mode still works with the blank default
+      }
+    })();
+  }, [inputSource, inputText, fixtures, stage]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -326,6 +342,14 @@ export function StageRunnerPanel({ stage }: { stage: StageSpec }) {
           </Select>
         )}
 
+        <div className="space-y-1">
+          <Label className="text-xs">Stage input (JSON)</Label>
+          {Object.keys(stage.input_shape).length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Fields: {Object.entries(stage.input_shape).map(([field, desc]) => `${field} (${desc})`).join(", ")}
+            </p>
+          )}
+        </div>
         <Textarea
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}

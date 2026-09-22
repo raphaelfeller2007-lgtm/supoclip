@@ -75,8 +75,12 @@ docker-compose.yml          Frontend/backend/worker/postgres/redis service defin
 | `frontend/src/app/settings/page.tsx` | User-facing settings (runtime settings form + local-only prefs) |
 | `frontend/src/tools/registry.ts` | The list of tools shown in the tab bar |
 | `init.sql` | Postgres schema — check here before assuming a column exists |
-| `backend/src/testing/stages.py` | Testing-tab stage registry — every isolated pipeline stage, one wrapper function each |
-| `frontend/src/components/testing/stage-runner-panel.tsx` | Testing-tab UI: input source, stub/real mode, run, output |
+| `backend/src/testing/stages.py` | Testing-tab Type A stage registry — every isolated pipeline stage, one wrapper function each |
+| `backend/src/testing/render_preview.py` | Testing-tab Type B render-and-preview — resolves the default/override clip, wraps `create_optimized_clip`/`RankingService._render_compilation` |
+| `frontend/src/components/testing/stage-runner-panel.tsx` | Testing-tab Type A UI: input source, stub/real mode, run, output |
+| `frontend/src/components/testing/visual-feature-panel.tsx` | Testing-tab Type B shell: template picker, settings slot, clip, Apply/preview/download, Update template |
+| `frontend/src/tools/testing/feature-map.ts` | Testing-tab sub-tab list — which stages/features exist per tool, Type A or B |
+| `frontend/src/components/settings-panels/` | Real settings components shared between the task page and the Testing tab (hook, captions, filler cuts, safe zones, emoji defaults, ranking number overlay) |
 
 ## How to Run Locally
 
@@ -116,12 +120,68 @@ Single backend test: `cd backend && .venv/bin/pytest tests/unit/test_x.py -k nam
 
 ## Testing Tab
 
-A dev-only tab (hidden unless `ENABLE_TESTING_TOOL=true`) that runs any single
-pipeline stage in isolation — no need to run the full pipeline, no AssemblyAI/
-LLM cost unless you explicitly opt into real mode. See
-`backend/src/testing/stages.py` for the full stage list (13 stages across
-Clipping and Ranking); each wraps an **existing** pipeline function, it never
-reimplements pipeline logic.
+A dev-only tab (hidden unless `ENABLE_TESTING_TOOL=true`) with two treatments,
+picked per sub-tab in `frontend/src/tools/testing/feature-map.ts`:
+
+- **Type A — LLM/utility stages** (`transcribe`, `generate_metadata`,
+  `policy_check`, `detect_clips`, `generate_hooks`, plus every pure-local
+  JSON-shape stage like `upload`/`export`/`cut_silence`/`folder_scan`/
+  `select_clips`/`text_memory`): the fixture/stub-real/provider-compare/
+  benchmark UI (`StageRunnerPanel`), backed by `backend/src/testing/stages.py`'s
+  13-stage registry — see below. Use this pattern for a new stage that
+  produces a **JSON result**, not something you look at.
+- **Type B — visual features** (`hook`, `captions`, `emoji`, `safe_zones`,
+  `filler_cuts` for Clipping; `bounce`, `sfx_alignment` for Ranking): no
+  fixtures/stub/benchmark — instead a template picker, the **real settings
+  component** (imported, never rebuilt — e.g. `HookStylePanel` is used by
+  both the task page's Project Settings sheet and the Testing tab), a test
+  clip, Apply (re-render), an in-browser preview, Download, and "Update
+  template" (writes only that feature's section into the selected
+  template). Backed by `VisualFeaturePanel`/`RankingVisualFeaturePanel`
+  (`frontend/src/components/testing/`) and the backend's
+  `POST /testing/render-preview` / `POST /testing/ranking-render-preview`
+  (`backend/src/testing/render_preview.py`), which wrap `create_optimized_clip`
+  / `RankingService._render_compilation` directly — same functions the real
+  pipeline uses, just against a standalone clip instead of a DB task. Use
+  this pattern for a feature you'd otherwise have to open the real app and
+  render a whole task to see.
+
+**Default test clip** (Type B's input): uploaded once in Settings → Testing,
+stored as `default_clip.<ext>` under `backend/src/testing/paths.py::default_clip_dir()`
+(a `_`-prefixed sibling of the real-run artifact cache, so it's excluded
+from `list_cached_task_ids`), remembered as the `TEST_DEFAULT_CLIP_FILENAME`
+admin setting (added via the same four-touch-point recipe as
+`RANKING_SFX_FILENAME` — `Config` field, `as_runtime_settings()`,
+`RUNTIME_SETTING_KEYS`, `SETTING_METADATA`). Any visual tab can instead
+upload a one-off clip for just that tab (`scope=session` on the same
+`POST /testing/default-clip` endpoint, written to
+`testing/paths.py::session_override_dir()`, never touching the persisted
+default). Captions never need a real transcript to preview: if the resolved
+clip has no cached `.transcript_cache.json`, `render_preview.py` builds a
+placeholder sentence with even word timing via `clip_editor.py`'s
+`_caption_words_with_timings` (the same helper the caption-editing flow
+already uses for this) — only the *styling* is under test, never real
+speech. Filler cuts (`build_clip_keep_ranges`) do need a cached transcript
+to demonstrate an actual cut; without one it renders the clip unchanged
+(never errors).
+
+**Section-scoped template update** ("Update template" in a Type B tab):
+`PATCH /templates/{id}/section/{section_name}` (`backend/src/api/routes/templates.py`)
+merges only that section's fields into the template's stored `settings`
+JSON (`TemplateRepository.update_settings_partial`) — every other section is
+untouched. `_SETTINGS_SECTIONS` maps a section name to its field list;
+`captions`/`hooks`/`filler_pauses` already existed (shared with
+`POST /tasks/{id}/settings`), `safe_zones`/`emoji` are new, Testing-tab-first
+sections with no per-task home yet (safe zones are frontend-only
+localStorage state, emoji reactions are purely per-clip) — they round-trip
+in a template's own JSON but aren't captured by "Save as Template from a
+task" or pushed onto a task by "Apply template". **Ranking has no "Update
+template"** — its 4 templates are shipped `backend/templates/ranking/<name>/config.json`
+files, not user-owned `project_templates` rows, so there's nothing safe to
+write back to; its Type B tabs' "Base template" picker is read-only.
+
+**Type A internals** — fixtures, stub mode, real-run cache, cost estimates,
+Docker mounts, and how to add a new stage/fixture:
 
 - **Fixtures** (canned sample inputs/outputs) → `test-fixtures/<tool>/<stage_id>/<name>.json`,
   git-committed. A fixture is `{"description", "input", "output"?}` — `output`
@@ -151,13 +211,27 @@ reimplements pipeline logic.
   `/app/test-fixtures` / `/app/test-artifacts`, with `TEST_FIXTURES_DIR`/
   `TEST_ARTIFACT_CACHE_DIR` set to match — they are **not** resolved relative
   to `TEMP_DIR` (which holds unnamespaced scratch files with no
-  sweep-safety guarantee).
-- **Add a new stage:** write an `async def run(input_data, *, mode, config)`
+  sweep-safety guarantee). The default test clip and session overrides live
+  a level deeper under `test-artifacts/_default_clip/` and
+  `test-artifacts/_scratch/session-overrides/` respectively — same mount,
+  no new Docker config needed.
+- **Add a new Type A stage:** write an `async def run(input_data, *, mode, config)`
   in `backend/src/testing/stages.py` wrapping the real function, add a
-  `StageSpec` entry via `_register(...)`. If it's an LLM/API stage, branch on
-  `mode == "stub"` before calling the real function and add 1-2 fixtures.
+  `StageSpec` entry via `_register(...)`, and list it in
+  `frontend/src/tools/testing/feature-map.ts`. If it's an LLM/API stage,
+  branch on `mode == "stub"` before calling the real function and add 1-2
+  fixtures.
 - **Add a fixture:** drop a JSON file under `test-fixtures/<tool>/<stage_id>/`,
   or use the tab's "Save as fixture" button on a completed run.
+- **Add a new Type B visual feature:** extract (don't copy) the real settings
+  component if it's still inline somewhere (see `frontend/src/components/settings-panels/`
+  for the pattern), give it a `{value, onChange}`-shaped props contract, wrap
+  it in `VisualFeaturePanel` (Clipping) or `RankingVisualFeaturePanel`
+  (Ranking) with `buildRenderInput` mapping the value to a
+  `RenderPreviewPayload`/`RankingRenderPreviewPayload`, and add a
+  `templateSection` (existing or new, in `_SETTINGS_SECTIONS`) if the
+  feature should be template-updatable. List it in
+  `frontend/src/tools/testing/feature-map.ts`.
 
 ## Common Pitfalls
 
@@ -213,11 +287,11 @@ One line each — full rationale in [docs/development.md](docs/development.md#fe
 - **New setting:** add the field to `Config` in `backend/src/config.py`, add its metadata to `SETTING_METADATA` in `backend/src/api/routes/admin.py`, always expose `current_value` (never hide a non-secret behind "configured"/"unset").
 - **New export preset:** append (don't reorder) to `EXPORT_PRESETS` in `backend/src/clip_editor.py`, including `max_duration_seconds`/`safe_area_*_pct`/`target_lufs`.
 - **Update safe zones:** edit `PLATFORM_SAFE_ZONES` in `frontend/src/lib/safe-zones.ts` — nothing else needs to change.
-- **New Testing-tab stage:** see "Testing Tab" above.
+- **New testable feature (Testing tab):** decide Type A (produces JSON, e.g. a new LLM call) vs Type B (produces something you look at, e.g. a new visual burn-in) — see "Testing Tab" above for both patterns.
 
 ## Environment Variables
 
-Full list: [docs/configuration.md](docs/configuration.md). Core: `ASSEMBLY_AI_API_KEY`, `LLM` (`provider:model`), `GOOGLE_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, `OLLAMA_BASE_URL`, `REQUIRE_AUTH`, `PEXELS_API_KEY`, `REDIS_HOST`/`PORT`, `DATABASE_URL`, `TEMP_DIR`. Testing tab: `ENABLE_TESTING_TOOL` (+ `NEXT_PUBLIC_ENABLE_TESTING_TOOL` on the frontend), `TEST_ARTIFACT_CACHE_ENABLED`, `TEST_FIXTURES_DIR`, `TEST_ARTIFACT_CACHE_DIR`.
+Full list: [docs/configuration.md](docs/configuration.md). Core: `ASSEMBLY_AI_API_KEY`, `LLM` (`provider:model`), `GOOGLE_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, `OLLAMA_BASE_URL`, `REQUIRE_AUTH`, `PEXELS_API_KEY`, `REDIS_HOST`/`PORT`, `DATABASE_URL`, `TEMP_DIR`. Testing tab: `ENABLE_TESTING_TOOL` (+ `NEXT_PUBLIC_ENABLE_TESTING_TOOL` on the frontend), `TEST_ARTIFACT_CACHE_ENABLED`, `TEST_FIXTURES_DIR`, `TEST_ARTIFACT_CACHE_DIR`. `TEST_DEFAULT_CLIP_FILENAME` is admin-editable, not an env var (set by uploading a clip in Settings → Testing).
 
 ## Other Subsystems
 

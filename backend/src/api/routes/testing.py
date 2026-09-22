@@ -7,10 +7,14 @@ not something the hosted product exposes to regular users. See CLAUDE.md's
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import aiofiles
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...auth_headers import resolve_authenticated_user_id
@@ -18,8 +22,18 @@ from ...config import get_config
 from ...database import get_db
 from ...repositories.cache_repository import CacheRepository
 from ...repositories.task_repository import TaskRepository
+from ...runtime_settings import encrypt_setting_value, load_runtime_settings_cache
+from ...video_utils import ffprobe_duration
 from ...testing.cache import list_cached_task_ids, load_cached_artifact
 from ...testing.fixtures import list_fixtures, load_fixture, save_fixture
+from ...testing.paths import default_clip_dir, session_override_dir
+from ...testing.render_preview import (
+    NoDefaultClipError,
+    PreviewInputError,
+    find_default_clip_path,
+    render_clipping_preview,
+    render_ranking_preview,
+)
 from ...testing.runner import estimate_cost, run_benchmark, run_stage
 from ...testing.stages import STAGE_REGISTRY
 
@@ -27,6 +41,28 @@ router = APIRouter(prefix="/testing", tags=["testing"])
 
 task_repo = TaskRepository()
 cache_repo = CacheRepository()
+
+_DEFAULT_CLIP_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
+_MAX_DEFAULT_CLIP_BYTES = 300 * 1024 * 1024
+
+
+async def _stream_upload(uploaded_file: UploadFile, target_path: Path, max_bytes: int) -> None:
+    written = 0
+    chunk_size = 1024 * 1024
+    try:
+        async with aiofiles.open(target_path, "wb") as destination:
+            while True:
+                chunk = await uploaded_file.read(chunk_size)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(status_code=413, detail="Uploaded file is too large")
+                await destination.write(chunk)
+    except Exception:
+        if target_path.exists():
+            target_path.unlink(missing_ok=True)
+        raise
 
 
 async def _require_enabled() -> None:
@@ -214,3 +250,164 @@ async def benchmark_endpoint(payload: BenchmarkPayload, _: None = Depends(_requi
         mode=payload.mode,
     )
     return {"runs": rows}
+
+
+# --- Default test clip (Settings -> Testing) -------------------------------
+
+
+@router.post("/default-clip")
+async def upload_default_clip(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    file: UploadFile = File(...),
+    scope: str = "persistent",
+    feature_key: Optional[str] = None,
+    _: None = Depends(_require_enabled),
+):
+    """Upload the clip visual-feature previews render against. `scope=persistent`
+    (default) replaces the one Settings -> Testing default clip; `scope=session`
+    (with a `feature_key`) uploads a one-off override for just that tab,
+    without touching the persisted default."""
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in _DEFAULT_CLIP_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported video format — use one of: {', '.join(sorted(_DEFAULT_CLIP_EXTENSIONS))}",
+        )
+
+    if scope == "session":
+        if not feature_key:
+            raise HTTPException(status_code=400, detail="feature_key is required for scope=session")
+        target_dir = session_override_dir()
+        for existing in target_dir.glob(f"{feature_key}.*"):
+            existing.unlink(missing_ok=True)
+        target_path = target_dir / f"{feature_key}{ext}"
+        await _stream_upload(file, target_path, _MAX_DEFAULT_CLIP_BYTES)
+        return {"session_clip_key": feature_key}
+
+    if scope != "persistent":
+        raise HTTPException(status_code=400, detail="scope must be 'persistent' or 'session'")
+
+    user_id = await _get_user_id(request, db)
+    target_dir = default_clip_dir()
+    for existing in target_dir.glob("default_clip.*"):
+        existing.unlink(missing_ok=True)
+    filename = f"default_clip{ext}"
+    target_path = target_dir / filename
+    await _stream_upload(file, target_path, _MAX_DEFAULT_CLIP_BYTES)
+
+    encrypted_value = encrypt_setting_value(filename)
+    await db.execute(
+        sql_text("""
+            INSERT INTO app_settings (setting_key, encrypted_value, updated_by)
+            VALUES ('TEST_DEFAULT_CLIP_FILENAME', :encrypted_value, :updated_by)
+            ON CONFLICT (setting_key) DO UPDATE
+            SET encrypted_value = EXCLUDED.encrypted_value,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = CURRENT_TIMESTAMP
+        """),
+        {"encrypted_value": encrypted_value, "updated_by": user_id},
+    )
+    await db.commit()
+    await load_runtime_settings_cache(db)
+
+    return {"filename": filename}
+
+
+@router.get("/default-clip")
+async def get_default_clip(_: None = Depends(_require_enabled)):
+    path = find_default_clip_path()
+    if not path:
+        raise HTTPException(status_code=404, detail="No default test clip uploaded yet")
+    return {
+        "filename": path.name,
+        "duration_seconds": ffprobe_duration(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+@router.get("/default-clip/file")
+async def get_default_clip_file(_: None = Depends(_require_enabled)):
+    path = find_default_clip_path()
+    if not path:
+        raise HTTPException(status_code=404, detail="No default test clip uploaded yet")
+    return FileResponse(path=str(path), media_type="video/mp4")
+
+
+# --- Visual-feature render preview ------------------------------------------
+
+
+class RenderPreviewPayload(BaseModel):
+    media_path: Optional[str] = None
+    session_clip_key: Optional[str] = None
+    start_time: float = 0.0
+    end_time: Optional[float] = None
+    add_subtitles: bool = False
+    font_family: Optional[str] = None
+    font_size: Optional[int] = None
+    font_color: Optional[str] = None
+    caption_template: str = "default"
+    output_format: str = "vertical"
+    keep_ranges: Optional[List[List[float]]] = None
+    hook_title: Optional[str] = None
+    hook_style: Optional[Dict[str, Any]] = None
+    social_overlay: Optional[Dict[str, Any]] = None
+    reactions: Optional[List[Dict[str, Any]]] = None
+    cleanup_settings: Optional[Dict[str, Any]] = None
+
+
+@router.post("/render-preview")
+async def render_preview_endpoint(
+    payload: RenderPreviewPayload, _: None = Depends(_require_enabled)
+):
+    try:
+        output_path = await render_clipping_preview(
+            media_path=payload.media_path,
+            session_clip_key=payload.session_clip_key,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+            add_subtitles=payload.add_subtitles,
+            font_family=payload.font_family,
+            font_size=payload.font_size,
+            font_color=payload.font_color,
+            caption_template=payload.caption_template,
+            output_format=payload.output_format,
+            keep_ranges=payload.keep_ranges,
+            hook_title=payload.hook_title,
+            hook_style=payload.hook_style,
+            social_overlay=payload.social_overlay,
+            reactions=payload.reactions,
+            cleanup_settings=payload.cleanup_settings,
+        )
+    except NoDefaultClipError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (PreviewInputError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FileResponse(path=str(output_path), media_type="video/mp4")
+
+
+class RankingRenderPreviewPayload(BaseModel):
+    template_id: str = "rapid_fire"
+    number_overlay: Optional[Dict[str, Any]] = None
+    use_global_sfx: Optional[bool] = None
+
+
+@router.post("/ranking-render-preview")
+async def ranking_render_preview_endpoint(
+    payload: RankingRenderPreviewPayload, _: None = Depends(_require_enabled)
+):
+    try:
+        output_path = await render_ranking_preview(
+            template_id=payload.template_id,
+            number_overlay=payload.number_overlay,
+            use_global_sfx=payload.use_global_sfx,
+        )
+    except (PreviewInputError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FileResponse(path=str(output_path), media_type="video/mp4")

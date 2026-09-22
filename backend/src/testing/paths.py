@@ -42,6 +42,25 @@ def scratch_root(config: Config | None = None) -> Path:
     return root
 
 
+def default_clip_dir(config: Config | None = None) -> Path:
+    """Where the Settings -> Testing "default test clip" upload lives.
+
+    Underscore-prefixed, same convention as `_scratch`, so it's excluded from
+    `list_cached_task_ids` (that lists real-run cache entries, keyed by
+    task_id, and this isn't one)."""
+    root = cache_root(config) / "_default_clip"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def session_override_dir(config: Config | None = None) -> Path:
+    """Per-tab "test on a different clip just for this session" uploads —
+    not persisted as a setting, just a scratch location keyed by feature."""
+    root = scratch_root(config) / "session-overrides"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def resolve_fixture_media_path(relative_path: str, config: Config | None = None) -> Path:
     """Resolve a fixture-relative media path (e.g. "clipping/media/sample.mp4"),
     rejecting any attempt to escape the fixtures root."""

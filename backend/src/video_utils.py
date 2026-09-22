@@ -4798,8 +4798,15 @@ def create_optimized_clip(
     hook_style: Optional[Dict[str, Any]] = None,
     social_overlay: Optional[Dict[str, Any]] = None,
     reactions: Optional[List[Dict[str, Any]]] = None,
+    caption_words: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
-    """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size)."""
+    """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size).
+
+    `caption_words` overrides the on-disk `.transcript_cache.json` lookup
+    with caller-supplied word timings (see build_assemblyai_ass_subtitles) —
+    used by the Testing tab to preview caption styling on a clip with no
+    cached transcript, without ever calling a real transcription API.
+    """
     try:
         if keep_ranges:
             effective_keep_ranges = normalize_source_ranges(keep_ranges)
@@ -4898,6 +4905,7 @@ def create_optimized_clip(
                 hook_style=hook_style,
                 social_overlay=social_overlay,
                 reactions=reactions,
+                caption_words=caption_words,
                 hook_image_overlays_out=hook_image_overlays,
             ):
                 burn_ass_path = ass_path

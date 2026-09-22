@@ -31,21 +31,22 @@ import {
 import { LOCAL_USER_ID } from "@/lib/local-user";
 import { useDebouncedEffect } from "@/lib/use-debounced-effect";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
-import { buildFontOptionsPayload, FONT_SIZE_OPTIONS, FONT_TEMPLATE_DEFAULT_VALUE } from "@/lib/font-options";
-import { DEFAULT_HOOK_STYLE, hookStylePayload, type HookAnimation, type HookPosition, type HookStyle, type HookTitleVariant } from "@/lib/hook-style";
+import { buildFontOptionsPayload } from "@/lib/font-options";
+import { DEFAULT_HOOK_STYLE, hookStylePayload, type HookStyle, type HookTitleVariant } from "@/lib/hook-style";
 import { DEFAULT_SOCIAL_OVERLAY, socialOverlayPayload, type SocialOverlay } from "@/lib/retention-settings";
-import { HookTitlePreview } from "@/components/hook-title-preview";
 import { HookVariantCompare } from "@/components/hook-variant-compare";
 import { ContentPolicyProjectPanel } from "@/components/editor/content-policy-project-panel";
 import { ClipMetadataPanel } from "@/components/editor/clip-metadata-panel";
-import { TemplatePicker, type TemplateInfo } from "@/components/template-picker";
+import { type TemplateInfo } from "@/components/template-picker";
+import { HookStylePanel } from "@/components/settings-panels/hook-style-panel";
+import { CaptionStylePanel } from "@/components/settings-panels/caption-style-panel";
+import { FillerCutPanel } from "@/components/settings-panels/filler-cut-panel";
+import { SafeZoneSettingsPanel } from "@/components/settings-panels/safe-zone-settings-panel";
 import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
 import { SafeZoneOverlay } from "@/components/safe-zone-overlay";
 import {
   PLATFORM_SAFE_ZONES,
-  SAFE_ZONE_PLATFORM_IDS,
   bandOverlapsUnsafeZone,
   platformForExportPreset,
   type SafeZoneSelection,
@@ -80,7 +81,7 @@ import { Progress } from "@/components/ui/progress";
 import Link from "next/link";
 import DynamicVideoPlayer from "@/components/dynamic-video-player";
 import { TranscriptPreview } from "@/components/transcript-preview";
-import { FontSelectOption, type FontOption } from "@/components/font-select-option";
+import { type FontOption } from "@/components/font-select-option";
 import { useDelayedFlag } from "@/hooks/use-delayed-flag";
 import { toast } from "@/lib/toast";
 import { recordLastOpenedProject } from "@/lib/last-project";
@@ -235,9 +236,6 @@ export default function TaskPage() {
   const [projectRemoveFillerWords, setProjectRemoveFillerWords] = useState(false);
   const [projectFilteredWords, setProjectFilteredWords] = useState("");
   const [projectHookStyle, setProjectHookStyle] = useState<HookStyle>(DEFAULT_HOOK_STYLE);
-  const updateProjectHookStyle = useCallback(<K extends keyof HookStyle>(key: K, value: HookStyle[K]) => {
-    setProjectHookStyle((current) => ({ ...current, [key]: value }));
-  }, []);
   const [projectSocialOverlay, setProjectSocialOverlay] = useState<SocialOverlay>(DEFAULT_SOCIAL_OVERLAY);
   const updateProjectSocialOverlay = useCallback(<K extends keyof SocialOverlay>(key: K, value: SocialOverlay[K]) => {
     setProjectSocialOverlay((current) => ({ ...current, [key]: value }));
@@ -1430,30 +1428,12 @@ export default function TaskPage() {
                   </Button>
                 )}
                 {task.status === "completed" && clips.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
-                      <Switch checked={safeZonesEnabled} onCheckedChange={setSafeZonesEnabled} />
-                      Safe Zones
-                    </label>
-                    {safeZonesEnabled && (
-                      <Select
-                        value={safeZonePlatform}
-                        onValueChange={(value) => setSafeZonePlatform(value as SafeZoneSelection)}
-                      >
-                        <SelectTrigger size="sm" aria-label="Safe zone platform" className="h-8 min-w-[140px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent align="start">
-                          <SelectItem value="all">All</SelectItem>
-                          {SAFE_ZONE_PLATFORM_IDS.map((id) => (
-                            <SelectItem key={id} value={id}>
-                              {PLATFORM_SAFE_ZONES[id].label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </div>
+                  <SafeZoneSettingsPanel
+                    enabled={safeZonesEnabled}
+                    platform={safeZonePlatform}
+                    onEnabledChange={setSafeZonesEnabled}
+                    onPlatformChange={setSafeZonePlatform}
+                  />
                 )}
                 {task.status === "completed" && clips.length > 0 && (
                   <Button
@@ -1760,273 +1740,27 @@ export default function TaskPage() {
                 </SheetHeader>
 
                 <div className="space-y-5 px-4">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-muted-foreground">Font</label>
-                    <Select
-                      value={projectFontFamily ?? FONT_TEMPLATE_DEFAULT_VALUE}
-                      onValueChange={(value) =>
-                        setProjectFontFamily(value === FONT_TEMPLATE_DEFAULT_VALUE ? null : value)
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Template default" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={FONT_TEMPLATE_DEFAULT_VALUE}>Template default</SelectItem>
-                        {availableFonts.map((font) => (
-                          <FontSelectOption
-                            key={font.name}
-                            font={font}
-                            isDeleting={deletingFontName === font.name}
-                            onDelete={handleDeleteFont}
-                          />
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <CaptionStylePanel
+                    fontFamily={projectFontFamily}
+                    fontSize={projectFontSize}
+                    fontColor={projectFontColor}
+                    captionTemplate={projectCaptionTemplate}
+                    onFontFamilyChange={setProjectFontFamily}
+                    onFontSizeChange={setProjectFontSize}
+                    onFontColorChange={setProjectFontColor}
+                    onCaptionTemplateChange={setProjectCaptionTemplate}
+                    availableFonts={availableFonts}
+                    availableTemplates={availableTemplates}
+                    deletingFontName={deletingFontName}
+                    onDeleteFont={handleDeleteFont}
+                  />
 
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-muted-foreground">Size</label>
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {FONT_SIZE_OPTIONS.map((option) => (
-                        <button
-                          key={option.label}
-                          type="button"
-                          onClick={() => setProjectFontSize(option.value)}
-                          className={`px-2 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                            projectFontSize === option.value
-                              ? "bg-foreground text-background border-foreground"
-                              : "bg-background text-muted-foreground border-border hover:border-primary"
-                          }`}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-medium text-muted-foreground">Color</label>
-                      <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={projectFontColor === null}
-                          onChange={(e) => setProjectFontColor(e.target.checked ? null : "#FFFFFF")}
-                          className="rounded"
-                        />
-                        Template default
-                      </label>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={projectFontColor ?? "#FFFFFF"}
-                        onChange={(e) => setProjectFontColor(e.target.value)}
-                        disabled={projectFontColor === null}
-                        className="h-9 w-9 rounded border border-border cursor-pointer disabled:cursor-not-allowed"
-                      />
-                      <Input
-                        value={projectFontColor ?? ""}
-                        onChange={(e) => setProjectFontColor(e.target.value)}
-                        disabled={projectFontColor === null}
-                        placeholder="Template default"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-muted-foreground">Caption Template</label>
-                    <TemplatePicker
-                      templates={availableTemplates}
-                      selectedId={projectCaptionTemplate}
-                      onSelect={setProjectCaptionTemplate}
-                    />
-                  </div>
-
-                  <div className="border border-border p-3 space-y-3">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">Hook title</div>
-                      <div className="text-xs text-muted-foreground">Style of the AI-written headline burned in for the first few seconds.</div>
-                    </div>
-
-                    <HookTitlePreview style={projectHookStyle} captionTemplate={projectCaptionTemplate} availableTemplates={availableTemplates} />
-
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Size</label>
-                      <div className="grid grid-cols-4 gap-1.5">
-                        {[
-                          { label: "Small", value: 0.65 },
-                          { label: "Default", value: null },
-                          { label: "Large", value: 1.0 },
-                          { label: "XL", value: 1.3 },
-                        ].map((option) => (
-                          <button
-                            key={option.label}
-                            type="button"
-                            onClick={() => updateProjectHookStyle("hook_font_size_scale", option.value)}
-                            className={`px-2 py-1.5 rounded-md text-xs font-medium border transition-colors ${
-                              projectHookStyle.hook_font_size_scale === option.value
-                                ? "bg-foreground text-background border-foreground"
-                                : "bg-background text-muted-foreground border-border hover:bg-border"
-                            }`}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground">Text color</label>
-                        <input
-                          type="color"
-                          value={projectHookStyle.hook_font_color ?? "#FFFFFF"}
-                          onChange={(e) => updateProjectHookStyle("hook_font_color", e.target.value)}
-                          className="w-full h-8 rounded border border-border cursor-pointer"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
-                          Text outline
-                          <Switch
-                            checked={(projectHookStyle.hook_stroke_width ?? 3) > 0}
-                            onCheckedChange={(checked) =>
-                              updateProjectHookStyle("hook_stroke_width", checked ? 3 : 0)
-                            }
-                          />
-                        </label>
-                        {(projectHookStyle.hook_stroke_width ?? 3) > 0 && (
-                          <>
-                            <div className="flex items-center justify-between">
-                              <span className="text-[11px] text-muted-foreground">Width</span>
-                              <span className="text-[11px] text-muted-foreground tabular-nums">
-                                {projectHookStyle.hook_stroke_width ?? 3}px
-                              </span>
-                            </div>
-                            <Slider
-                              value={[projectHookStyle.hook_stroke_width ?? 3]}
-                              min={1}
-                              max={10}
-                              step={1}
-                              onValueChange={([value]) => updateProjectHookStyle("hook_stroke_width", value)}
-                            />
-                            <input
-                              type="color"
-                              value={projectHookStyle.hook_stroke_color ?? "#000000"}
-                              onChange={(e) => updateProjectHookStyle("hook_stroke_color", e.target.value)}
-                              className="w-full h-8 rounded border border-border cursor-pointer"
-                            />
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
-                          Background color
-                          <Switch
-                            checked={projectHookStyle.hook_background_color !== null}
-                            onCheckedChange={(checked) =>
-                              updateProjectHookStyle(
-                                "hook_background_color",
-                                checked ? (projectHookStyle.hook_background_color ?? "#000000") : null,
-                              )
-                            }
-                          />
-                        </label>
-                        {projectHookStyle.hook_background_color !== null && (
-                          <input
-                            type="color"
-                            value={projectHookStyle.hook_background_color.slice(0, 7)}
-                            onChange={(e) => updateProjectHookStyle("hook_background_color", e.target.value)}
-                            className="w-full h-8 rounded border border-border cursor-pointer"
-                          />
-                        )}
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
-                          Background outline
-                          <Switch
-                            checked={projectHookStyle.hook_box_outline_color !== null}
-                            onCheckedChange={(checked) =>
-                              updateProjectHookStyle(
-                                "hook_box_outline_color",
-                                checked ? (projectHookStyle.hook_box_outline_color ?? "#000000") : null,
-                              )
-                            }
-                          />
-                        </label>
-                        {projectHookStyle.hook_box_outline_color !== null && (
-                          <input
-                            type="color"
-                            value={projectHookStyle.hook_box_outline_color}
-                            onChange={(e) => updateProjectHookStyle("hook_box_outline_color", e.target.value)}
-                            className="w-full h-8 rounded border border-border cursor-pointer"
-                          />
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Position</label>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {(["top", "center", "bottom"] as HookPosition[]).map((position) => (
-                          <button
-                            key={position}
-                            type="button"
-                            onClick={() => updateProjectHookStyle("hook_position", position)}
-                            className={`px-2 py-1.5 rounded-md text-xs font-medium border capitalize transition-colors ${
-                              (projectHookStyle.hook_position ?? "top") === position
-                                ? "bg-foreground text-background border-foreground"
-                                : "bg-background text-muted-foreground border-border hover:bg-border"
-                            }`}
-                          >
-                            {position}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Animation</label>
-                      <Select
-                        value={projectHookStyle.hook_animation ?? "fade_pop"}
-                        onValueChange={(value) => updateProjectHookStyle("hook_animation", value as HookAnimation)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="fade_pop">Fade + Pop</SelectItem>
-                          <SelectItem value="fade">Fade</SelectItem>
-                          <SelectItem value="slide_down">Slide Down</SelectItem>
-                          <SelectItem value="zoom_punch">Zoom Punch</SelectItem>
-                          <SelectItem value="bounce">Bounce</SelectItem>
-                          <SelectItem value="pulse">Pulse</SelectItem>
-                          <SelectItem value="none">None</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <label className="flex items-center justify-between text-sm text-foreground">
-                      Drop shadow
-                      <Switch
-                        checked={projectHookStyle.hook_shadow ?? true}
-                        onCheckedChange={(checked) => updateProjectHookStyle("hook_shadow", checked)}
-                      />
-                    </label>
-
-                    <button
-                      type="button"
-                      className="text-xs text-muted-foreground hover:text-foreground underline"
-                      onClick={() => setProjectHookStyle(DEFAULT_HOOK_STYLE)}
-                    >
-                      Reset hook styling to template default
-                    </button>
-                  </div>
+                  <HookStylePanel
+                    style={projectHookStyle}
+                    onChange={setProjectHookStyle}
+                    captionTemplate={projectCaptionTemplate}
+                    availableTemplates={availableTemplates}
+                  />
 
                   <div className="border border-border p-3 space-y-3">
                     <div className="flex items-center justify-between">
@@ -2055,54 +1789,16 @@ export default function TaskPage() {
                     )}
                   </div>
 
-                  <div className="border border-border p-3 space-y-3">
-                    <div>
-                      <div className="text-sm font-medium text-foreground">Clip cleanup</div>
-                      <div className="text-xs text-muted-foreground">Apply silence and filler-word cuts to regenerated clips.</div>
-                    </div>
-
-                    <label className="flex items-center gap-2 text-sm text-foreground">
-                      <input
-                        type="checkbox"
-                        checked={projectCutLongPauses}
-                        onChange={(e) => setProjectCutLongPauses(e.target.checked)}
-                        className="rounded"
-                      />
-                      Cut long pauses
-                    </label>
-
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Pause threshold (ms)</label>
-                      <Input
-                        type="number"
-                        min={250}
-                        max={3000}
-                        step={50}
-                        value={projectPauseThresholdMs}
-                        onChange={(e) => setProjectPauseThresholdMs(e.target.value)}
-                        disabled={!projectCutLongPauses}
-                      />
-                    </div>
-
-                    <label className="flex items-center gap-2 text-sm text-foreground">
-                      <input
-                        type="checkbox"
-                        checked={projectRemoveFillerWords}
-                        onChange={(e) => setProjectRemoveFillerWords(e.target.checked)}
-                        className="rounded"
-                      />
-                      Remove filler words
-                    </label>
-
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Extra filtered words or phrases</label>
-                      <Input
-                        value={projectFilteredWords}
-                        onChange={(e) => setProjectFilteredWords(e.target.value)}
-                        placeholder="basically, literally, to be honest"
-                      />
-                    </div>
-                  </div>
+                  <FillerCutPanel
+                    cutLongPauses={projectCutLongPauses}
+                    pauseThresholdMs={projectPauseThresholdMs}
+                    removeFillerWords={projectRemoveFillerWords}
+                    filteredWords={projectFilteredWords}
+                    onCutLongPausesChange={setProjectCutLongPauses}
+                    onPauseThresholdMsChange={setProjectPauseThresholdMs}
+                    onRemoveFillerWordsChange={setProjectRemoveFillerWords}
+                    onFilteredWordsChange={setProjectFilteredWords}
+                  />
                 </div>
 
                 <Separator className="my-2" />

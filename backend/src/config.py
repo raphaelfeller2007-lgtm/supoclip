@@ -177,6 +177,13 @@ class Config:
             "TEST_ARTIFACT_CACHE_DIR", "test-artifacts"
         )
         self.test_fixtures_dir = os.getenv("TEST_FIXTURES_DIR", "test-fixtures")
+        # Filename of the Settings -> Testing "default test clip" upload
+        # (POST /testing/default-clip saves the bytes; this setting only
+        # remembers which filename, same reference-not-bytes pattern as
+        # RANKING_SFX_FILENAME above).
+        self.test_default_clip_filename = (
+            self._get_runtime_setting("TEST_DEFAULT_CLIP_FILENAME") or None
+        )
 
     @staticmethod
     def _normalize_ranking_framing(value: str) -> str:
@@ -250,6 +257,7 @@ class Config:
             "RANKING_SFX_FILENAME": self.ranking_sfx_filename,
             "RANKING_SFX_OFFSET_PCT": str(self.ranking_sfx_offset_pct),
             "RANKING_DEFAULT_FRAMING": self.ranking_default_framing,
+            "TEST_DEFAULT_CLIP_FILENAME": self.test_default_clip_filename,
         }
 
     @staticmethod
