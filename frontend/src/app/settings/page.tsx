@@ -17,6 +17,7 @@ import { track } from "@/lib/datafast";
 import Link from "next/link";
 import { Type, Palette, CheckCircle, AlertCircle, Settings, ArrowLeft, Mail, KeyRound, ChevronRight, Mic, Music, SlidersHorizontal, Download, LayoutTemplate, ShieldAlert, Sparkles, ListOrdered, FlaskConical } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { HomeTopBar } from "@/components/home/home-top-bar";
 import { RuntimeSettingsForm, type RuntimeSetting } from "@/components/admin/runtime-settings-form";
 import { LlmConnectionTest } from "@/components/settings/llm-connection-test";
 import { EmptyState } from "@/components/empty-state";
@@ -401,6 +402,7 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      <HomeTopBar />
       {/* Header */}
       <div className="border-b bg-background">
         <div className="max-w-7xl mx-auto px-4 py-4">

@@ -15,6 +15,10 @@ interface ClipMetadataPanelProps {
   taskId: string;
   clipId: string;
   title: string | null | undefined;
+  /** Shown title (e.g. the clip's hook title) to prefill the metadata title
+   * with when no metadata title has been generated/saved yet, so the field
+   * isn't blank and the two don't have to be kept in sync by hand. */
+  fallbackTitle?: string | null;
   description: string | null | undefined;
   tags: string[] | undefined;
   provider: "ollama" | "gemini" | null | undefined;
@@ -48,6 +52,7 @@ export function ClipMetadataPanel({
   taskId,
   clipId,
   title,
+  fallbackTitle,
   description,
   tags,
   provider,
@@ -55,7 +60,7 @@ export function ClipMetadataPanel({
   stale,
   onSaved,
 }: ClipMetadataPanelProps) {
-  const [titleDraft, setTitleDraft] = useState(title ?? "");
+  const [titleDraft, setTitleDraft] = useState(title || fallbackTitle || "");
   const [descriptionDraft, setDescriptionDraft] = useState(description ?? "");
   const [tagsDraft, setTagsDraft] = useState((tags ?? []).join(", "));
   const [isSaving, setIsSaving] = useState(false);
@@ -63,10 +68,10 @@ export function ClipMetadataPanel({
   const [quality, setQuality] = useState("balanced");
 
   useEffect(() => {
-    setTitleDraft(title ?? "");
+    setTitleDraft(title || fallbackTitle || "");
     setDescriptionDraft(description ?? "");
     setTagsDraft((tags ?? []).join(", "));
-  }, [clipId, title, description, tags]);
+  }, [clipId, title, fallbackTitle, description, tags]);
 
   const buildSupportError = async (response: Response, fallbackMessage: string) => {
     const parsed = await parseApiError(response, fallbackMessage);

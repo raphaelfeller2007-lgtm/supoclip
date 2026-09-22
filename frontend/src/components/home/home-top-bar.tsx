@@ -2,24 +2,42 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { Bell, Activity, Settings } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { Bell, Activity, Home, Settings } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { toast } from "@/lib/toast";
 
 /** Persistent, thin header — wordmark left, icon-only quick access right.
- * Deliberately no search input here (per product direction: this is an
- * operator dashboard, not a search surface). */
+ * Sticky so it stays visible while a page scrolls, and rendered from every
+ * app-shell layout (home, clipping, rank, testing, settings) so it's the
+ * one nav bar visible on every screen. Deliberately no search input here
+ * (per product direction: this is an operator dashboard, not a search
+ * surface). */
 export function HomeTopBar() {
+  const pathname = usePathname();
+  const isHome = pathname === "/";
+
   return (
-    <header className="border-b border-border bg-background">
+    <header className="sticky top-0 z-40 border-b border-border bg-background">
       <div className="max-w-6xl mx-auto px-4 h-12 flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <Link href="/" className="flex items-center gap-2">
           <Image src="/logo.png" alt="SupoClip" width={20} height={20} className="rounded-sm" />
           <span className="text-sm font-bold tracking-tight text-foreground">SupoClip</span>
-        </div>
+        </Link>
         <div className="flex items-center gap-1">
+          <Link href="/">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Home"
+              aria-current={isHome ? "page" : undefined}
+              className={isHome ? "text-foreground" : "text-muted-foreground"}
+            >
+              <Home className="w-4 h-4" />
+            </Button>
+          </Link>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -32,9 +50,10 @@ export function HomeTopBar() {
             variant="ghost"
             size="icon-sm"
             aria-label="System status"
-            onClick={() =>
-              document.getElementById("system-status-strip")?.scrollIntoView({ behavior: "smooth" })
-            }
+            onClick={() => {
+              if (!isHome) return;
+              document.getElementById("system-status-strip")?.scrollIntoView({ behavior: "smooth" });
+            }}
           >
             <Activity className="w-4 h-4" />
           </Button>

@@ -16,7 +16,7 @@ export function ToolTabs() {
   const pathname = usePathname();
 
   return (
-    <nav className="border-b border-border bg-background">
+    <nav className="sticky top-12 z-30 border-b border-border bg-background">
       <div className="max-w-6xl mx-auto px-4 flex items-center gap-1">
         {TOOLS.map((tool) => {
           const href = tool.href ?? `/tools/${tool.id}`;

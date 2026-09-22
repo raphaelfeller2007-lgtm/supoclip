@@ -1,5 +1,6 @@
 import { noIndexMetadata } from "@/lib/seo";
 import { ToolTabs } from "@/components/tool-tabs";
+import { HomeTopBar } from "@/components/home/home-top-bar";
 
 export const metadata = noIndexMetadata;
 
@@ -9,6 +10,7 @@ export const metadata = noIndexMetadata;
 export default function TestingLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
+      <HomeTopBar />
       <ToolTabs />
       {children}
     </>

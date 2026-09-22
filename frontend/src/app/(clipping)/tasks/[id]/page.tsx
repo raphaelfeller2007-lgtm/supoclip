@@ -1615,7 +1615,7 @@ export default function TaskPage() {
                         <div className="p-6 flex-1">
                           <div className="flex items-start justify-between mb-4">
                             <div>
-                              <h3 className="font-semibold text-lg text-foreground mb-1">
+                              <h3 className="font-semibold text-lg text-foreground mb-1 select-text">
                                 {clip.hook_title || `Clip ${clip.clip_order}`}
                               </h3>
                               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1931,7 +1931,7 @@ export default function TaskPage() {
                             />
                             Select for merge
                           </label>
-                          <h3 className="font-semibold text-lg text-foreground mb-1">
+                          <h3 className="font-semibold text-lg text-foreground mb-1 select-text">
                             {clip.hook_title || `Clip ${clip.clip_order}`}
                           </h3>
                           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -2041,6 +2041,7 @@ export default function TaskPage() {
                           taskId={task?.id ?? ""}
                           clipId={clip.id}
                           title={clip.metadata_title}
+                          fallbackTitle={clip.hook_title || `Clip ${clip.clip_order}`}
                           description={clip.metadata_description}
                           tags={clip.metadata_tags ?? undefined}
                           provider={clip.metadata_provider as "ollama" | "gemini" | null | undefined}
