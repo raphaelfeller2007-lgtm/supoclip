@@ -87,7 +87,7 @@ export function SafeZoneOverlay({ selection }: SafeZoneOverlayProps) {
           width={Math.max(0, 100 - commonInsets.left - commonInsets.right)}
           height={Math.max(0, 100 - commonInsets.top - commonInsets.bottom)}
           fill="none"
-          stroke="var(--color-teal)"
+          stroke="var(--color-brand-accent)"
           strokeWidth={0.5}
           vectorEffect="non-scaling-stroke"
         />
