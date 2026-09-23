@@ -10,6 +10,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
+import { BrollSettingsPanel } from "@/components/settings-panels/broll-settings-panel";
+import { CleanupSensitivityPanel } from "@/components/settings-panels/cleanup-sensitivity-panel";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
 import { buildFontOptionsPayload, FONT_SIZE_OPTIONS, FONT_TEMPLATE_DEFAULT_VALUE } from "@/lib/font-options";
 import { DEFAULT_HOOK_STYLE, hookStylePayload, type HookAnimation, type HookPosition, type HookStyle } from "@/lib/hook-style";
@@ -25,7 +27,7 @@ import {
   type BrollSettings,
   type SocialOverlay,
   type TargetDuration,
-} from "@/lib/retention-settings";
+} from "@/lib/engagement-settings";
 import {
   deletePreset,
   listPresets,
@@ -404,12 +406,12 @@ export default function VideoProcessingPage() {
 
   const getStepIcon = (step: string) => {
     const iconMap: Record<string, React.ReactElement> = {
-      validation: <Loader2 className="w-4 h-4 animate-spin text-secondary" />,
-      source_analysis: <Loader2 className="w-4 h-4 animate-spin text-secondary" />,
+      validation: <Loader2 className="w-4 h-4 animate-spin text-foreground" />,
+      source_analysis: <Loader2 className="w-4 h-4 animate-spin text-foreground" />,
       youtube_info: <Youtube className="w-4 h-4 text-foreground" />,
       download: <Loader2 className="w-4 h-4 animate-spin text-primary" />,
-      transcript: <Loader2 className="w-4 h-4 animate-spin text-secondary" />,
-      ai_analysis: <Loader2 className="w-4 h-4 animate-spin text-secondary" />,
+      transcript: <Loader2 className="w-4 h-4 animate-spin text-foreground" />,
+      ai_analysis: <Loader2 className="w-4 h-4 animate-spin text-foreground" />,
       clip_generation: <Loader2 className="w-4 h-4 animate-spin text-primary" />,
       complete: <CheckCircle className="w-4 h-4 text-primary" />,
     };
@@ -688,7 +690,7 @@ export default function VideoProcessingPage() {
                   <div className="absolute left-3 z-10 max-w-[75%]" style={{ bottom: "10%" }}>
                     <p className="text-background text-xs font-bold mb-1 flex items-center gap-1">
                       @{socialOverlay.username.trim() || "yourhandle"}
-                      {socialOverlay.verified && <span className="text-secondary">✓</span>}
+                      {socialOverlay.verified && <span className="text-foreground">✓</span>}
                     </p>
                     <p className="text-background/80 text-[10px]">
                       {(socialOverlay.likes.trim() || "24.5K")} likes · {(socialOverlay.comments.trim() || "482")} comments
@@ -1303,140 +1305,58 @@ export default function VideoProcessingPage() {
                   )}
                 </div>
 
-                <div className="border border-border bg-background p-3 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-sm font-medium text-foreground">B-roll cuts</h3>
-                      <p className="text-xs text-muted-foreground">Let the AI suggest B-roll insertion points from stock footage.</p>
-                    </div>
-                    <Switch checked={brollSettings.enabled} onCheckedChange={(checked) => updateBrollSettings("enabled", checked)} disabled={isLoading} />
-                  </div>
-                  {brollSettings.enabled && (
-                    <div className="space-y-3">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
-                          <span>Max insertions per clip</span>
-                          <span>{brollSettings.maxInsertions}</span>
-                        </label>
-                        <input
-                          type="range"
-                          min={1}
-                          max={6}
-                          step={1}
-                          value={brollSettings.maxInsertions}
-                          onChange={(e) => updateBrollSettings("maxInsertions", Number(e.target.value))}
-                          disabled={isLoading}
-                          className="w-full"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
-                          <span>Minimum gap between insertions</span>
-                          <span>{brollSettings.minGapSeconds}s</span>
-                        </label>
-                        <input
-                          type="range"
-                          min={2}
-                          max={30}
-                          step={1}
-                          value={brollSettings.minGapSeconds}
-                          onChange={(e) => updateBrollSettings("minGapSeconds", Number(e.target.value))}
-                          disabled={isLoading}
-                          className="w-full"
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <BrollSettingsPanel settings={brollSettings} onChange={updateBrollSettings} disabled={isLoading} />
               </div>
             )}
 
             {/* Cleanup tab */}
             {activeTab === "cleanup" && (
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setCleanupSensitivity(cleanupSensitivity ?? 50)}
-                    disabled={isLoading}
-                    className={`px-2 py-1.5 text-xs font-medium border transition-colors ${
-                      cleanupSensitivity !== null ? "bg-foreground text-background border-foreground" : "bg-background text-muted-foreground border-border hover:text-foreground"
-                    }`}
-                  >
-                    Auto
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCleanupSensitivity(null)}
-                    disabled={isLoading}
-                    className={`px-2 py-1.5 text-xs font-medium border transition-colors ${
-                      cleanupSensitivity === null ? "bg-foreground text-background border-foreground" : "bg-background text-muted-foreground border-border hover:text-foreground"
-                    }`}
-                  >
-                    Manual
-                  </button>
-                </div>
-
-                {cleanupSensitivity !== null ? (
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-foreground">Cleanup sensitivity</label>
-                      <span className="text-xs text-muted-foreground tabular-nums">{cleanupSensitivity}/100</span>
-                    </div>
-                    <Slider
-                      value={[cleanupSensitivity]}
-                      min={0}
-                      max={100}
-                      step={1}
-                      disabled={isLoading}
-                      onValueChange={([value]) => setCleanupSensitivity(value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Higher values cut shorter pauses and more filler words at once. Meaning-changing
-                      cuts (punchlines, sentence-ending words, emphatic delivery) are always protected
-                      regardless of sensitivity.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">Cut long pauses</div>
-                        <div className="text-xs text-muted-foreground">Split out silence gaps longer than your threshold.</div>
+                <CleanupSensitivityPanel
+                  sensitivity={cleanupSensitivity}
+                  onSensitivityChange={setCleanupSensitivity}
+                  disabled={isLoading}
+                  manualContent={
+                    <>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-medium text-foreground">Cut long pauses</div>
+                          <div className="text-xs text-muted-foreground">Split out silence gaps longer than your threshold.</div>
+                        </div>
+                        <Switch checked={cutLongPauses} onCheckedChange={setCutLongPauses} disabled={isLoading} />
                       </div>
-                      <Switch checked={cutLongPauses} onCheckedChange={setCutLongPauses} disabled={isLoading} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Pause threshold (ms)</label>
-                      <Input
-                        type="number"
-                        min={250}
-                        max={3000}
-                        step={50}
-                        value={pauseThresholdMs}
-                        onChange={(e) => setPauseThresholdMs(e.target.value)}
-                        disabled={isLoading || !cutLongPauses}
-                        placeholder="900"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">Remove filler words</div>
-                        <div className="text-xs text-muted-foreground">Uses a safe default list like &quot;um&quot;, &quot;uh&quot;, and &quot;you know&quot;.</div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-muted-foreground">Pause threshold (ms)</label>
+                        <Input
+                          type="number"
+                          min={250}
+                          max={3000}
+                          step={50}
+                          value={pauseThresholdMs}
+                          onChange={(e) => setPauseThresholdMs(e.target.value)}
+                          disabled={isLoading || !cutLongPauses}
+                          placeholder="900"
+                        />
                       </div>
-                      <Switch checked={removeFillerWords} onCheckedChange={setRemoveFillerWords} disabled={isLoading} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-muted-foreground">Extra filtered words or phrases</label>
-                      <Input
-                        value={filteredWords}
-                        onChange={(e) => setFilteredWords(e.target.value)}
-                        disabled={isLoading}
-                        placeholder="basically, literally, to be honest"
-                      />
-                    </div>
-                  </>
-                )}
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-medium text-foreground">Remove filler words</div>
+                          <div className="text-xs text-muted-foreground">Uses a safe default list like &quot;um&quot;, &quot;uh&quot;, and &quot;you know&quot;.</div>
+                        </div>
+                        <Switch checked={removeFillerWords} onCheckedChange={setRemoveFillerWords} disabled={isLoading} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-muted-foreground">Extra filtered words or phrases</label>
+                        <Input
+                          value={filteredWords}
+                          onChange={(e) => setFilteredWords(e.target.value)}
+                          disabled={isLoading}
+                          placeholder="basically, literally, to be honest"
+                        />
+                      </div>
+                    </>
+                  }
+                />
               </div>
             )}
 
@@ -1445,7 +1365,7 @@ export default function VideoProcessingPage() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-4 p-3 border rounded-lg bg-background">
                   <div className="flex min-w-0 items-center gap-3">
-                    <Monitor className="w-4 h-4 text-secondary" />
+                    <Monitor className="w-4 h-4 text-foreground" />
                     <div>
                       <h3 className="text-sm font-medium text-foreground">Framing</h3>
                       <p className="text-xs text-muted-foreground">Choose how clips are reframed for social video</p>

@@ -1,6 +1,6 @@
 const STATUS_CONFIG: Record<string, { label: string; dotClass: string; textClass: string }> = {
   completed: { label: "Completed", dotClass: "rounded-full bg-primary", textClass: "text-primary font-semibold" },
-  processing: { label: "Processing", dotClass: "rounded-full bg-secondary animate-pulse", textClass: "text-secondary font-semibold" },
+  processing: { label: "Processing", dotClass: "rounded-full bg-foreground animate-pulse", textClass: "text-foreground font-semibold" },
   queued: { label: "Queued", dotClass: "rounded-full bg-foreground", textClass: "text-foreground" },
   error: { label: "Error", dotClass: "bg-foreground", textClass: "text-foreground font-bold" },
   cancelled: { label: "Cancelled", dotClass: "rounded-full border border-foreground", textClass: "text-muted-foreground" },

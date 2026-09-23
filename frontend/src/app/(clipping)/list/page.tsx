@@ -119,9 +119,9 @@ const STATUS_CONFIG: Record<
   },
   processing: {
     label: "Processing",
-    dotClass: "bg-secondary animate-pulse",
-    bgClass: "border-secondary",
-    textClass: "text-secondary",
+    dotClass: "bg-foreground animate-pulse",
+    bgClass: "border-foreground",
+    textClass: "text-foreground",
   },
   queued: {
     label: "Queued",
@@ -446,8 +446,8 @@ export default function ListPage() {
                   </span>
                 )}
                 {activeCount > 0 && (
-                  <span className="inline-flex items-center gap-1.5 border border-secondary px-2.5 py-1 text-xs font-medium text-secondary">
-                    <span className="h-1.5 w-1.5 rounded-full bg-secondary animate-pulse" />
+                  <span className="inline-flex items-center gap-1.5 border border-foreground px-2.5 py-1 text-xs font-medium text-foreground">
+                    <span className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
                     {activeCount} active
                   </span>
                 )}

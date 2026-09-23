@@ -40,7 +40,7 @@ import {
   socialOverlayPayload,
   type BrollSettings,
   type SocialOverlay,
-} from "@/lib/retention-settings";
+} from "@/lib/engagement-settings";
 import { HookVariantCompare } from "@/components/hook-variant-compare";
 import { ContentPolicyProjectPanel } from "@/components/editor/content-policy-project-panel";
 import { ClipMetadataPanel } from "@/components/editor/clip-metadata-panel";
@@ -49,8 +49,9 @@ import { HookStylePanel } from "@/components/settings-panels/hook-style-panel";
 import { CaptionStylePanel } from "@/components/settings-panels/caption-style-panel";
 import { FillerCutPanel } from "@/components/settings-panels/filler-cut-panel";
 import { SafeZoneSettingsPanel } from "@/components/settings-panels/safe-zone-settings-panel";
+import { BrollSettingsPanel } from "@/components/settings-panels/broll-settings-panel";
+import { CleanupSensitivityPanel } from "@/components/settings-panels/cleanup-sensitivity-panel";
 import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
 import { SafeZoneOverlay } from "@/components/safe-zone-overlay";
 import {
@@ -1834,106 +1835,28 @@ export default function TaskPage() {
                       )}
                     </div>
 
-                    <div className="border border-border p-3 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-sm font-medium text-foreground">B-roll cuts</div>
-                          <div className="text-xs text-muted-foreground">Let the AI suggest B-roll insertion points from stock footage.</div>
-                        </div>
-                        <Switch
-                          checked={projectBrollSettings.enabled}
-                          onCheckedChange={(checked) => updateProjectBrollSettings("enabled", checked)}
-                        />
-                      </div>
-                      {projectBrollSettings.enabled && (
-                        <div className="space-y-3">
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
-                              <span>Max insertions per clip</span>
-                              <span>{projectBrollSettings.maxInsertions}</span>
-                            </label>
-                            <input
-                              type="range"
-                              min={1}
-                              max={6}
-                              step={1}
-                              value={projectBrollSettings.maxInsertions}
-                              onChange={(e) => updateProjectBrollSettings("maxInsertions", Number(e.target.value))}
-                              className="w-full"
-                            />
-                          </div>
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
-                              <span>Minimum gap between insertions</span>
-                              <span>{projectBrollSettings.minGapSeconds}s</span>
-                            </label>
-                            <input
-                              type="range"
-                              min={2}
-                              max={30}
-                              step={1}
-                              value={projectBrollSettings.minGapSeconds}
-                              onChange={(e) => updateProjectBrollSettings("minGapSeconds", Number(e.target.value))}
-                              className="w-full"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <BrollSettingsPanel settings={projectBrollSettings} onChange={updateProjectBrollSettings} />
                   </div>
 
                   <div className="space-y-3">
                     <h4 className="text-sm font-medium text-foreground">Cleanup</h4>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setProjectCleanupSensitivity(projectCleanupSensitivity ?? 50)}
-                        className={`px-2 py-1.5 text-xs font-medium border transition-colors ${
-                          projectCleanupSensitivity !== null ? "bg-foreground text-background border-foreground" : "bg-background text-muted-foreground border-border hover:text-foreground"
-                        }`}
-                      >
-                        Auto
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setProjectCleanupSensitivity(null)}
-                        className={`px-2 py-1.5 text-xs font-medium border transition-colors ${
-                          projectCleanupSensitivity === null ? "bg-foreground text-background border-foreground" : "bg-background text-muted-foreground border-border hover:text-foreground"
-                        }`}
-                      >
-                        Manual
-                      </button>
-                    </div>
-                    {projectCleanupSensitivity !== null ? (
-                      <div className="border border-border p-3 space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="text-sm font-medium text-foreground">Cleanup sensitivity</label>
-                          <span className="text-xs text-muted-foreground tabular-nums">{projectCleanupSensitivity}/100</span>
-                        </div>
-                        <Slider
-                          value={[projectCleanupSensitivity]}
-                          min={0}
-                          max={100}
-                          step={1}
-                          onValueChange={([value]) => setProjectCleanupSensitivity(value)}
+                    <CleanupSensitivityPanel
+                      sensitivity={projectCleanupSensitivity}
+                      onSensitivityChange={setProjectCleanupSensitivity}
+                      sliderWrapperClassName="border border-border p-3 space-y-1.5"
+                      manualContent={
+                        <FillerCutPanel
+                          cutLongPauses={projectCutLongPauses}
+                          pauseThresholdMs={projectPauseThresholdMs}
+                          removeFillerWords={projectRemoveFillerWords}
+                          filteredWords={projectFilteredWords}
+                          onCutLongPausesChange={setProjectCutLongPauses}
+                          onPauseThresholdMsChange={setProjectPauseThresholdMs}
+                          onRemoveFillerWordsChange={setProjectRemoveFillerWords}
+                          onFilteredWordsChange={setProjectFilteredWords}
                         />
-                        <p className="text-xs text-muted-foreground">
-                          Higher values cut shorter pauses and more filler words at once. Meaning-changing
-                          cuts are always protected regardless of sensitivity.
-                        </p>
-                      </div>
-                    ) : (
-                      <FillerCutPanel
-                        cutLongPauses={projectCutLongPauses}
-                        pauseThresholdMs={projectPauseThresholdMs}
-                        removeFillerWords={projectRemoveFillerWords}
-                        filteredWords={projectFilteredWords}
-                        onCutLongPausesChange={setProjectCutLongPauses}
-                        onPauseThresholdMsChange={setProjectPauseThresholdMs}
-                        onRemoveFillerWordsChange={setProjectRemoveFillerWords}
-                        onFilteredWordsChange={setProjectFilteredWords}
-                      />
-                    )}
+                      }
+                    />
                   </div>
 
                   {task.status === "completed" && clips.length > 0 && (

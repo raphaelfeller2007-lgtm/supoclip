@@ -34,7 +34,7 @@ export default function BlogIndexPage() {
             <Image src="/logo.png" alt="SupoClip" width={24} height={24} className="rounded-lg" />
             <span
               className="text-lg font-bold tracking-tight"
-              style={{ fontFamily: "var(--font-syne), var(--font-geist-sans), system-ui" }}
+              style={{ fontFamily: "var(--font-syne), system-ui" }}
             >
               SupoClip
             </span>
@@ -70,7 +70,7 @@ export default function BlogIndexPage() {
           <div className="max-w-3xl">
             <h1
               className="text-4xl font-extrabold tracking-tight sm:text-5xl"
-              style={{ fontFamily: "var(--font-syne), var(--font-geist-sans), system-ui" }}
+              style={{ fontFamily: "var(--font-syne), system-ui" }}
             >
               Practical guides for turning long videos into better shorts.
             </h1>
@@ -97,7 +97,7 @@ export default function BlogIndexPage() {
             </div>
             <h2
               className="text-3xl font-bold tracking-tight sm:text-4xl"
-              style={{ fontFamily: "var(--font-syne), var(--font-geist-sans), system-ui" }}
+              style={{ fontFamily: "var(--font-syne), system-ui" }}
             >
               {featuredPost.title}
             </h2>

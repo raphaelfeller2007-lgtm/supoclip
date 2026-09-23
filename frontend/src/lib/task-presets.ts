@@ -1,5 +1,5 @@
 import type { HookStyle } from "@/lib/hook-style";
-import type { BrollSettings, SocialOverlay, TargetDuration } from "@/lib/retention-settings";
+import type { BrollSettings, SocialOverlay, TargetDuration } from "@/lib/engagement-settings";
 
 export type TaskGenerationSettings = {
   fontFamily: string | null;

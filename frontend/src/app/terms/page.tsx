@@ -29,7 +29,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <section className="space-y-3">
       <h2
         className="text-2xl font-bold tracking-tight"
-        style={{ fontFamily: "var(--font-syne), var(--font-geist-sans), system-ui" }}
+        style={{ fontFamily: "var(--font-syne), system-ui" }}
       >
         {title}
       </h2>
@@ -47,7 +47,7 @@ export default function TermsOfServicePage() {
             <Image src="/logo.png" alt="SupoClip" width={24} height={24} className="rounded-lg" />
             <span
               className="text-lg font-bold tracking-tight"
-              style={{ fontFamily: "var(--font-syne), var(--font-geist-sans), system-ui" }}
+              style={{ fontFamily: "var(--font-syne), system-ui" }}
             >
               SupoClip
             </span>
@@ -65,7 +65,7 @@ export default function TermsOfServicePage() {
         <div className="space-y-3">
           <h1
             className="text-4xl font-extrabold tracking-tight sm:text-5xl"
-            style={{ fontFamily: "var(--font-syne), var(--font-geist-sans), system-ui" }}
+            style={{ fontFamily: "var(--font-syne), system-ui" }}
           >
             Terms of Service
           </h1>

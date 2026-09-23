@@ -16,9 +16,8 @@ interface SafeZoneOverlayProps {
  * like/share rail, nav) will sit over the exported frame. Preview-only — this
  * never gets burned into the render.
  *
- * Follows DESIGN.md's locked 4-color palette: no fills or alpha, just ink
- * (warning/unsafe boundary) and teal (safe-area boundary) hairlines, per the
- * project's "warning is weight, not a hue" convention.
+ * Follows DESIGN.md's palette: no fills or alpha, just ink (per-platform
+ * boundary) and the brand accent (combined safe-area boundary) hairlines.
  */
 export function SafeZoneOverlay({ selection }: SafeZoneOverlayProps) {
   const platforms =

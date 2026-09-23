@@ -278,7 +278,7 @@ One line each — full rationale in [docs/development.md](docs/development.md#fe
 - Local-first: no login/cloud required by default (`REQUIRE_AUTH=false`); don't add features that assume a hosted backend.
 - Minimal deps: prefer stdlib/already-installed packages; justify any new dependency.
 - Backwards compat: DB migrations are additive; old task/clip rows without a new column must still work.
-- 4-color palette locked (ink/paper/teal/blue) for all core-product screens — see DESIGN.md. No new colors, gradients, shadows, or opacity tricks (one sanctioned scrim exception).
+- Palette locked to the twelve tokens in DESIGN.md §2 (paper/ink pairing plus one signal accent) for all core-product screens. No new colors, gradients, shadows, or opacity tricks (one sanctioned scrim exception).
 - Ollama-first for LLM features, Gemini/cloud is opt-in fallback only — never the reverse default.
 
 ## How to Add X
