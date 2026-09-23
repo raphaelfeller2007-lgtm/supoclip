@@ -10,7 +10,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -26,6 +26,9 @@ YOUTUBE_METADATA_PROVIDER_DATA_API = "youtube_data_api"
 YOUTUBE_DOWNLOAD_PROVIDER_YTDLP = "yt_dlp"
 YOUTUBE_DOWNLOAD_PROVIDER_APIFY = "apify"
 YOUTUBE_DATA_API_URL = "https://www.googleapis.com/youtube/v3/videos"
+YOUTUBE_CHANNELS_API_URL = "https://www.googleapis.com/youtube/v3/channels"
+YOUTUBE_PLAYLIST_ITEMS_API_URL = "https://www.googleapis.com/youtube/v3/playlistItems"
+YOUTUBE_SEARCH_API_URL = "https://www.googleapis.com/youtube/v3/search"
 
 
 class YouTubeDownloader:
@@ -146,6 +149,19 @@ def _pick_best_thumbnail(thumbnails: Optional[Dict[str, Any]]) -> Optional[str]:
             return candidate["url"]
 
     return None
+
+
+def _parse_youtube_timestamp(value: Optional[str]) -> Optional[datetime]:
+    """Parse a YouTube API RFC3339 timestamp (e.g. publishedAt) into a real
+    datetime — asyncpg needs an actual datetime object for a TIMESTAMPTZ
+    column parameter, not a raw ISO string."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Could not parse YouTube timestamp: %s", value)
+        return None
 
 
 def _normalize_upload_date(published_at: Optional[str]) -> Optional[str]:
@@ -685,3 +701,282 @@ def cleanup_downloaded_files(video_id: str):
 def extract_video_id(url: str) -> Optional[str]:
     """Backward compatibility wrapper."""
     return get_youtube_video_id(url)
+
+
+# --- Channel tracking (Channels tab) ---------------------------------------
+# Public YouTube Data API v3 lookups only — no OAuth, no login. Mirrors
+# _fetch_video_info_with_youtube_data_api's shape (sync requests, trimmed
+# `fields=`, (10, 30) timeout). Used by ChannelService for both the one-off
+# "add a channel" resolution and the periodic sync cron job.
+
+CHANNEL_ID_PATTERN = re.compile(r"^UC[a-zA-Z0-9_-]{22}$")
+
+_CHANNEL_LIST_FIELDS = (
+    "items(id,"
+    "snippet(title,customUrl,thumbnails(default(url),medium(url),high(url))),"
+    "statistics(subscriberCount,viewCount,videoCount),"
+    "contentDetails(relatedPlaylists(uploads)))"
+)
+
+
+class ChannelResolutionError(ValueError):
+    """A pasted channel URL/handle definitively can't be resolved (bad
+    input, channel doesn't exist) — distinct from a network/transient
+    failure, so callers know not to retry a hopeless case."""
+
+
+def parse_channel_identifier(raw_input: str) -> Dict[str, str]:
+    """Classify a pasted channel URL/handle before any network call.
+
+    Returns {"kind": "channel_id"|"handle"|"username"|"vanity", "value": str}.
+    Pure parsing, no I/O — resolve_channel_identifier does the actual API
+    call(s), cheapest path first.
+    """
+    value = (raw_input or "").strip()
+    if not value:
+        raise ChannelResolutionError("Channel URL or handle is required")
+
+    if CHANNEL_ID_PATTERN.match(value):
+        return {"kind": "channel_id", "value": value}
+
+    if value.startswith("@") and "/" not in value:
+        return {"kind": "handle", "value": value}
+
+    try:
+        parsed = urlparse(value if "://" in value else f"https://{value}")
+        path = parsed.path
+    except Exception:
+        path = value
+
+    segments = [segment for segment in path.strip("/").split("/") if segment]
+    if segments:
+        first = segments[0]
+        if first == "channel" and len(segments) > 1 and CHANNEL_ID_PATTERN.match(segments[1]):
+            return {"kind": "channel_id", "value": segments[1]}
+        if first.startswith("@"):
+            return {"kind": "handle", "value": first}
+        if first == "user" and len(segments) > 1:
+            return {"kind": "username", "value": segments[1]}
+        if first == "c" and len(segments) > 1:
+            return {"kind": "vanity", "value": segments[1]}
+        if CHANNEL_ID_PATTERN.match(first):
+            return {"kind": "channel_id", "value": first}
+        # A bare "youtube.com/SomeName" (old-style, no /c/ prefix) — no
+        # direct API param resolves this, same as a /c/ vanity URL.
+        return {"kind": "vanity", "value": first}
+
+    # Not URL-shaped and no leading "@" — try it as a handle first, the
+    # cheapest guess; resolve_channel_identifier falls back to search.
+    return {"kind": "handle", "value": f"@{value}"}
+
+
+def _channels_list(params: Dict[str, Any]) -> Dict[str, Any]:
+    config = get_config()
+    api_key = config.resolve_youtube_data_api_key()
+    if not api_key:
+        raise ValueError("Missing YOUTUBE_DATA_API_KEY and GOOGLE_API_KEY")
+
+    response = requests.get(
+        YOUTUBE_CHANNELS_API_URL,
+        params={**params, "key": api_key},
+        timeout=(10, 30),
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _search_channel_id(query: str) -> Optional[str]:
+    """search.list fallback for a legacy vanity URL — costs 100 quota units,
+    only called when the cheap channels.list path finds nothing."""
+    config = get_config()
+    api_key = config.resolve_youtube_data_api_key()
+    if not api_key:
+        raise ValueError("Missing YOUTUBE_DATA_API_KEY and GOOGLE_API_KEY")
+
+    response = requests.get(
+        YOUTUBE_SEARCH_API_URL,
+        params={
+            "part": "snippet",
+            "type": "channel",
+            "q": query,
+            "maxResults": 1,
+            "key": api_key,
+            "fields": "items(id(channelId))",
+        },
+        timeout=(10, 30),
+    )
+    response.raise_for_status()
+    items = (response.json() or {}).get("items") or []
+    if not items:
+        return None
+    return items[0]["id"]["channelId"]
+
+
+def _normalize_channel_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    snippet = item.get("snippet") or {}
+    statistics = item.get("statistics") or {}
+    content_details = item.get("contentDetails") or {}
+    related_playlists = content_details.get("relatedPlaylists") or {}
+    return {
+        "youtube_channel_id": item.get("id"),
+        "handle": snippet.get("customUrl"),
+        "title": snippet.get("title"),
+        "thumbnail_url": _pick_best_thumbnail(snippet.get("thumbnails")),
+        "uploads_playlist_id": related_playlists.get("uploads"),
+        "subscriber_count": _parse_optional_int(statistics.get("subscriberCount")),
+        "view_count": _parse_optional_int(statistics.get("viewCount")),
+        "video_count": _parse_optional_int(statistics.get("videoCount")),
+    }
+
+
+def resolve_channel_identifier(raw_input: str) -> Dict[str, Any]:
+    """Resolve a pasted channel URL/handle to full channel details.
+
+    Cheapest API path first (channels.list by id/handle/username, 1 quota
+    unit) — that single call already returns everything needed to populate
+    a channel row (title, handle, thumbnail, subscriber/view/video counts,
+    uploads playlist id). Only a legacy vanity URL or a cheap-path miss
+    falls back to search.list (100 units) plus one follow-up channels.list
+    call for statistics (search.list doesn't return them).
+    """
+    parsed = parse_channel_identifier(raw_input)
+    part = "snippet,statistics,contentDetails"
+
+    payload: Optional[Dict[str, Any]] = None
+    if parsed["kind"] == "channel_id":
+        payload = _channels_list({"part": part, "id": parsed["value"], "fields": _CHANNEL_LIST_FIELDS})
+    elif parsed["kind"] == "handle":
+        payload = _channels_list({"part": part, "forHandle": parsed["value"], "fields": _CHANNEL_LIST_FIELDS})
+    elif parsed["kind"] == "username":
+        payload = _channels_list({"part": part, "forUsername": parsed["value"], "fields": _CHANNEL_LIST_FIELDS})
+
+    items = (payload or {}).get("items") or []
+    if not items:
+        found_id = _search_channel_id(parsed["value"])
+        if not found_id:
+            raise ChannelResolutionError(f"No YouTube channel found for {raw_input!r}")
+        payload = _channels_list({"part": part, "id": found_id, "fields": _CHANNEL_LIST_FIELDS})
+        items = (payload or {}).get("items") or []
+        if not items:
+            raise ChannelResolutionError(f"No YouTube channel found for {raw_input!r}")
+
+    return _normalize_channel_item(items[0])
+
+
+def fetch_channel_details(youtube_channel_id: str) -> Dict[str, Any]:
+    """Refresh call for an already-tracked channel (used by every sync)."""
+    payload = _channels_list(
+        {
+            "part": "snippet,statistics,contentDetails",
+            "id": youtube_channel_id,
+            "fields": _CHANNEL_LIST_FIELDS,
+        }
+    )
+    items = (payload or {}).get("items") or []
+    if not items:
+        raise ChannelResolutionError(
+            f"Channel {youtube_channel_id} no longer exists or is inaccessible"
+        )
+    return _normalize_channel_item(items[0])
+
+
+def fetch_channel_recent_video_ids(uploads_playlist_id: str, max_results: int = 50) -> List[str]:
+    """Most-recent-first video ids from a channel's uploads playlist (1 quota
+    unit — a single page, since max_results is capped at YouTube's own
+    50-per-page limit)."""
+    config = get_config()
+    api_key = config.resolve_youtube_data_api_key()
+    if not api_key:
+        raise ValueError("Missing YOUTUBE_DATA_API_KEY and GOOGLE_API_KEY")
+
+    response = requests.get(
+        YOUTUBE_PLAYLIST_ITEMS_API_URL,
+        params={
+            "part": "contentDetails",
+            "playlistId": uploads_playlist_id,
+            "maxResults": min(max_results, 50),
+            "key": api_key,
+            "fields": "items(contentDetails(videoId))",
+        },
+        timeout=(10, 30),
+    )
+    response.raise_for_status()
+    items = (response.json() or {}).get("items") or []
+    return [
+        item["contentDetails"]["videoId"]
+        for item in items
+        if item.get("contentDetails", {}).get("videoId")
+    ]
+
+
+def fetch_videos_details(video_ids: List[str]) -> List[Dict[str, Any]]:
+    """Batched video snippet/stats lookup — up to 50 ids per call, 1 quota
+    unit regardless of how many ids are in the batch."""
+    if not video_ids:
+        return []
+
+    config = get_config()
+    api_key = config.resolve_youtube_data_api_key()
+    if not api_key:
+        raise ValueError("Missing YOUTUBE_DATA_API_KEY and GOOGLE_API_KEY")
+
+    response = requests.get(
+        YOUTUBE_DATA_API_URL,
+        params={
+            "part": "snippet,contentDetails,statistics",
+            "id": ",".join(video_ids[:50]),
+            "key": api_key,
+            "fields": (
+                "items(id,"
+                "snippet(title,description,publishedAt,"
+                "thumbnails(default(url),medium(url),high(url),standard(url),maxres(url))),"
+                "contentDetails(duration),"
+                "statistics(viewCount,likeCount,commentCount))"
+            ),
+        },
+        timeout=(10, 30),
+    )
+    response.raise_for_status()
+    items = (response.json() or {}).get("items") or []
+
+    results: List[Dict[str, Any]] = []
+    for item in items:
+        snippet = item.get("snippet") or {}
+        content_details = item.get("contentDetails") or {}
+        statistics = item.get("statistics") or {}
+        results.append(
+            {
+                "youtube_video_id": item.get("id"),
+                "title": snippet.get("title"),
+                "description": snippet.get("description", ""),
+                "thumbnail_url": _pick_best_thumbnail(snippet.get("thumbnails")),
+                "published_at": _parse_youtube_timestamp(snippet.get("publishedAt")),
+                "duration_seconds": _parse_iso8601_duration_to_seconds(
+                    content_details.get("duration", "")
+                ),
+                "view_count": _parse_optional_int(statistics.get("viewCount")),
+                "like_count": _parse_optional_int(statistics.get("likeCount")),
+                "comment_count": _parse_optional_int(statistics.get("commentCount")),
+            }
+        )
+    return results
+
+
+async def async_resolve_channel_identifier(raw_input: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(resolve_channel_identifier, raw_input)
+
+
+async def async_fetch_channel_details(youtube_channel_id: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(fetch_channel_details, youtube_channel_id)
+
+
+async def async_fetch_channel_recent_video_ids(
+    uploads_playlist_id: str, max_results: int = 50
+) -> List[str]:
+    return await asyncio.to_thread(
+        fetch_channel_recent_video_ids, uploads_playlist_id, max_results
+    )
+
+
+async def async_fetch_videos_details(video_ids: List[str]) -> List[Dict[str, Any]]:
+    return await asyncio.to_thread(fetch_videos_details, video_ids)

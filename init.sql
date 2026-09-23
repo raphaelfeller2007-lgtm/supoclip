@@ -178,6 +178,89 @@ CREATE TABLE ranking_folder_clips (
 
 CREATE INDEX idx_ranking_folder_clips_folder_id ON ranking_folder_clips(folder_id, use_count);
 
+-- Tracked YouTube channels (public Data API lookup, no OAuth/login) and
+-- their synced videos/stats history, plus per-clip publish scheduling. See
+-- migrations/sql/20260923_0001_channels_publish_scheduling.sql for the
+-- rationale behind each table's shape.
+CREATE TABLE channels (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    youtube_channel_id VARCHAR(64) NOT NULL,
+    handle VARCHAR(255),
+    title VARCHAR(255),
+    thumbnail_url VARCHAR(500),
+    uploads_playlist_id VARCHAR(64),
+    subscriber_count BIGINT,
+    view_count BIGINT,
+    video_count INTEGER,
+    added_input VARCHAR(500) NOT NULL,
+    sync_status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (sync_status IN ('pending', 'syncing', 'synced', 'error')),
+    sync_error TEXT,
+    last_synced_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, youtube_channel_id)
+);
+
+CREATE INDEX idx_channels_user_id ON channels(user_id);
+
+CREATE TABLE channel_videos (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    channel_id VARCHAR(36) NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    youtube_video_id VARCHAR(32) NOT NULL,
+    title VARCHAR(500),
+    description TEXT,
+    thumbnail_url VARCHAR(500),
+    published_at TIMESTAMP WITH TIME ZONE,
+    duration_seconds INTEGER,
+    view_count BIGINT,
+    like_count BIGINT,
+    comment_count BIGINT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (channel_id, youtube_video_id)
+);
+
+CREATE INDEX idx_channel_videos_channel_id ON channel_videos(channel_id, published_at DESC);
+
+CREATE TABLE channel_stats_snapshots (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    channel_id VARCHAR(36) NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    snapshot_date DATE NOT NULL,
+    subscriber_count BIGINT,
+    view_count BIGINT,
+    video_count INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (channel_id, snapshot_date)
+);
+
+CREATE INDEX idx_channel_stats_snapshots_channel_id ON channel_stats_snapshots(channel_id, snapshot_date);
+
+CREATE TABLE clip_publish_schedules (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    clip_id VARCHAR(36) NOT NULL REFERENCES generated_clips(id) ON DELETE CASCADE,
+    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scheduled_at TIMESTAMP WITH TIME ZONE,
+    title VARCHAR(100),
+    description TEXT,
+    tags TEXT,
+    visibility VARCHAR(20) NOT NULL DEFAULT 'private' CHECK (visibility IN ('public', 'unlisted', 'private')),
+    status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'scheduled')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (clip_id)
+);
+
+CREATE INDEX idx_clip_publish_schedules_user_id ON clip_publish_schedules(user_id, scheduled_at);
+
+CREATE TABLE clip_publish_targets (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    schedule_id VARCHAR(36) NOT NULL REFERENCES clip_publish_schedules(id) ON DELETE CASCADE,
+    channel_id VARCHAR(36) NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (schedule_id, channel_id)
+);
+
 CREATE TABLE processing_cache (
     cache_key VARCHAR(255) PRIMARY KEY,
     source_url TEXT NOT NULL,

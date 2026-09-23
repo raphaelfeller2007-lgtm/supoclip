@@ -185,6 +185,18 @@ class Config:
             self._get_runtime_setting("TEST_DEFAULT_CLIP_FILENAME") or None
         )
 
+        # Channels tab (tracked YouTube channels, synced via the public Data
+        # API — no OAuth). Plain env vars, not admin-editable: these are
+        # operational knobs (sync cadence, quota-conscious video cap), not
+        # user-facing settings. Reuses YOUTUBE_DATA_API_KEY (already wired
+        # above) via resolve_youtube_data_api_key() for every API call.
+        self.channel_sync_poll_interval_hours = int(
+            os.getenv("CHANNEL_SYNC_POLL_INTERVAL_HOURS", "6")
+        )
+        self.channel_sync_max_videos_per_channel = int(
+            os.getenv("CHANNEL_SYNC_MAX_VIDEOS_PER_CHANNEL", "50")
+        )
+
     @staticmethod
     def _normalize_ranking_framing(value: str) -> str:
         value = (value or "").strip().lower()

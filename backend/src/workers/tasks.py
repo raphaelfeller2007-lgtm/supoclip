@@ -193,6 +193,41 @@ async def process_ranking_task(ctx: Dict[str, Any], task_id: str) -> Dict[str, A
             raise
 
 
+async def sync_channel_job(ctx: Dict[str, Any], channel_id: str) -> None:
+    """One-off job: refresh a single tracked channel's details/videos/stats
+    (see ChannelService.sync_channel). Enqueued right after a channel is
+    added, and by the manual resync endpoint."""
+    from ..database import AsyncSessionLocal
+    from ..runtime_settings import load_runtime_settings_cache
+    from ..services.channel_service import ChannelService
+
+    set_trace_id(f"channel-sync-{channel_id}")
+    logger.info(f"Worker syncing channel {channel_id}")
+
+    async with AsyncSessionLocal() as db:
+        await load_runtime_settings_cache(db)
+        await ChannelService(db).sync_channel(channel_id)
+
+
+async def poll_channel_updates_job(ctx: Dict[str, Any]) -> Dict[str, int]:
+    """Cron entrypoint (the first periodic job in this codebase): sync every
+    tracked channel, across every user. ChannelService.sync_channel never
+    raises, so a single channel's failure can't abort the run — see
+    ChannelService.poll_all_channels."""
+    from ..database import AsyncSessionLocal
+    from ..runtime_settings import load_runtime_settings_cache
+    from ..services.channel_service import ChannelService
+
+    set_trace_id("channel-poll")
+    logger.info("Worker polling all tracked channels for updates")
+
+    async with AsyncSessionLocal() as db:
+        await load_runtime_settings_cache(db)
+        result = await ChannelService(db).poll_all_channels()
+        logger.info(f"Channel poll complete: {result}")
+        return result
+
+
 async def process_batch_queue_task(ctx: Dict[str, Any], batch_queue_id: str) -> None:
     """Background worker job for a batch queue: walks its items sequentially
     (see BatchQueueService.run_batch). Pause/cancel is signaled the same way
@@ -224,17 +259,39 @@ async def process_batch_queue_task(ctx: Dict[str, Any], batch_queue_id: str) -> 
             raise
 
 
+def _channel_poll_cron_hours(interval_hours: int) -> set:
+    """arq's cron() is calendar-field-based, not a fixed-interval timer —
+    this only yields evenly-spaced runs when interval_hours divides 24.
+    Falls back to a hard-coded 6h cadence otherwise (logged), which is fine
+    given the feature only needs "kept automatically up to date," not
+    minute-level freshness."""
+    if interval_hours <= 0 or 24 % interval_hours != 0:
+        logger.warning(
+            "CHANNEL_SYNC_POLL_INTERVAL_HOURS=%s doesn't evenly divide 24; falling back to 6h",
+            interval_hours,
+        )
+        interval_hours = 6
+    return set(range(0, 24, interval_hours))
+
+
 # Worker configuration for arq
 class WorkerSettings:
     """Configuration for arq worker."""
 
-    from ..config import Config
+    from arq import cron
     from arq.connections import RedisSettings
+
+    from ..config import Config
 
     config = Config()
 
     # Functions to run
-    functions = [process_video_task, process_batch_queue_task, process_ranking_task]
+    functions = [
+        process_video_task,
+        process_batch_queue_task,
+        process_ranking_task,
+        sync_channel_job,
+    ]
     queue_name = "supoclip_tasks"
 
     # Redis settings from environment
@@ -248,4 +305,14 @@ class WorkerSettings:
 
     # Worker pool settings
     max_jobs = 4  # Process up to 4 jobs simultaneously
-    cron_jobs = []
+
+    # First cron job in this codebase — periodic channel sync (Channels tab).
+    # sync_channel_job (one-off) doesn't need a cron_jobs entry of its own;
+    # arq merges cron_jobs into its function table automatically.
+    cron_jobs = [
+        cron(
+            poll_channel_updates_job,
+            hour=_channel_poll_cron_hours(config.channel_sync_poll_interval_hours),
+            minute=0,
+        )
+    ]
