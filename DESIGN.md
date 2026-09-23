@@ -82,6 +82,14 @@ it darkens consistently in both themes (`ink` itself flips to a light color in
 dark mode, which would lighten a scrim instead of dimming it). Don't add any
 other alpha usage of the palette.
 
+A second sanctioned exception: `landing-page.tsx`'s `HeroVisual` demo player
+overlays a caption gradient (`bg-gradient-to-t from-black/70`) and semi-opaque
+play/mute control backgrounds directly on arbitrary video pixels, not a themed
+surface — alpha here is what keeps controls/captions legible over unpredictable
+video content, the same rationale as the scrim above. `backdrop-blur` is not
+part of the exception — softness is ornamental, translucency is functional,
+so blur is dropped from both controls while the alpha stays.
+
 ## 3. Typography
 
 **Font stack:** `"Helvetica Neue", Helvetica, Arial, "Liberation Sans",
@@ -93,8 +101,10 @@ monospace, so this existing assignment is kept as-is. No third family in
 core-product screens. (`Syne` remains loaded only for the marketing pages
 that are being phased out — do not use it in any new core-product UI.)
 
-Weights are light (300), regular (400) or bold (700) only. Never a second
-typeface, italics, underlines, or decorative styles for hierarchy.
+Weights are light (300), regular (400) or bold (700) only — except the
+`label` level's 500, used for tiny uppercase tags where true bold reads too
+heavy at that size. Never a second typeface, italics, underlines, or
+decorative styles for hierarchy.
 
 | Level | Size / line-height | Weight | Tracking | Usage |
 |---|---|---|---|---|
@@ -257,15 +267,24 @@ type scale this pass — see "Known follow-ups".
 This pass covered `globals.css` tokens, font loading, and the shared
 `components/ui/*` primitives only. Individual screens still reference the
 previous vocabulary until a follow-up pass touches them:
-- `(clipping)/create`, `tasks/[id]`, `(rank)/rank/create`, `landing-page.tsx`,
+- `(clipping)/create`, `tasks/[id]`, `(rank)/rank/create`,
   blog/privacy pages — not re-themed; some use arbitrary `text-[Npx]` sizing
-  instead of the new type scale (heaviest in `landing-page.tsx` and
-  `rank/create/page.tsx`).
+  instead of the new type scale (heaviest in `rank/create/page.tsx`).
+  `landing-page.tsx` was re-themed in a later pass (Syne removed, full type
+  scale adopted, flush-left/asymmetric hero, no shadows/gradients/blur, one
+  accent-fill cell) — see its own file for the current pattern.
 - `backend/src/ranking_overlay.py` — burned-in rank-tile colors unchanged.
 - `rank/create/page.tsx`'s `bg-[#FFD700]` gold badge — unchanged (see "Gold
   #1" above).
 - `home/tool-card.tsx`'s one arbitrary `text-[11px] font-mono` badge — could
   move onto `text-label` once a page-level pass touches this file.
+- The `text-title`/`text-subtitle` levels still have no adopters beyond
+  `landing-page.tsx`'s use of `text-title` — wire them up as each remaining
+  screen gets its re-theme pass. `text-display-xl`/`text-display`/
+  `text-headline`/`text-label` are now live on the landing page, which is
+  also what added the mobile step-down media query for the three poster
+  levels (`globals.css`, below the `@theme inline` block) — the levels
+  themselves had no responsive behavior wired in before that.
 
 ## 6. Tokens Reference
 

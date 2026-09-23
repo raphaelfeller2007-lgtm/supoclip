@@ -21,10 +21,8 @@ import {
   MonitorPlay,
   Share2,
   Wand2,
-  ChevronDown,
   ExternalLink,
   Check,
-  Zap,
   Menu,
   X,
   Volume2,
@@ -224,60 +222,49 @@ export default function LandingPage() {
     <div className="min-h-screen bg-background text-foreground">
       {/* ─── NAV ─── */}
       <nav
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-          scrolled
-            ? "bg-background/80 backdrop-blur-xl border-b shadow-sm"
-            : "bg-transparent"
+        className={`fixed top-0 left-0 right-0 z-50 transition-colors duration-300 ${
+          scrolled ? "bg-background border-b border-border" : "bg-transparent"
         }`}
       >
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2.5 group">
+          <Link href="/" className="flex items-center gap-2">
             <Image
               src="/logo.png"
               alt="SupoClip"
               width={24}
               height={24}
-              className="rounded-lg transition-transform group-hover:scale-105"
             />
-            <span
-              className="text-lg font-bold tracking-tight"
-              style={{
-                fontFamily:
-                  "var(--font-syne), var(--font-geist-sans), system-ui",
-              }}
-            >
-              SupoClip
-            </span>
+            <span className="text-title">SupoClip</span>
           </Link>
 
           <div className="hidden md:flex items-center gap-8">
             <a
               href="#how-it-works"
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="text-small text-muted-foreground hover:text-foreground transition-colors"
             >
               How It Works
             </a>
             <a
               href="#features"
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="text-small text-muted-foreground hover:text-foreground transition-colors"
             >
               Features
             </a>
             <a
               href="#pricing"
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="text-small text-muted-foreground hover:text-foreground transition-colors"
             >
               Pricing
             </a>
             <a
               href="#open-source"
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="text-small text-muted-foreground hover:text-foreground transition-colors"
             >
               Open Source
             </a>
             <Link
               href="/blog"
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="text-small text-muted-foreground hover:text-foreground transition-colors"
             >
               Blog
             </Link>
@@ -320,40 +307,40 @@ export default function LandingPage() {
 
         {/* Mobile nav dropdown */}
         {mobileNavOpen && (
-          <div className="md:hidden border-t bg-background/95 backdrop-blur-xl">
+          <div className="md:hidden border-t border-border bg-background">
             <div className="max-w-6xl mx-auto px-6 py-4 space-y-1">
               <a
                 href="#how-it-works"
                 onClick={() => setMobileNavOpen(false)}
-                className="block rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                className="block px-3 py-2 text-small text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               >
                 How It Works
               </a>
               <a
                 href="#features"
                 onClick={() => setMobileNavOpen(false)}
-                className="block rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                className="block px-3 py-2 text-small text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               >
                 Features
               </a>
               <a
                 href="#pricing"
                 onClick={() => setMobileNavOpen(false)}
-                className="block rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                className="block px-3 py-2 text-small text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               >
                 Pricing
               </a>
               <a
                 href="#open-source"
                 onClick={() => setMobileNavOpen(false)}
-                className="block rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                className="block px-3 py-2 text-small text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               >
                 Open Source
               </a>
               <Link
                 href="/blog"
                 onClick={() => setMobileNavOpen(false)}
-                className="block rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                className="block px-3 py-2 text-small text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
               >
                 Blog
               </Link>
@@ -385,48 +372,28 @@ export default function LandingPage() {
       </nav>
 
       {/* ─── HERO ─── */}
-      <section className="relative pt-32 pb-20 md:pt-40 md:pb-28 overflow-hidden">
-        {/* Subtle background pattern */}
-        <div
-          className="absolute inset-0 opacity-[0.02]"
-          style={{
-            backgroundImage:
-              "radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0)",
-            backgroundSize: "32px 32px",
-          }}
-        />
-
-        <div className="relative max-w-6xl mx-auto px-6">
-          <div className="grid lg:grid-cols-2 gap-16 lg:gap-20 items-center">
+      <section className="relative pt-32 pb-20 md:pt-40 md:pb-28">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-5">
             {/* Left: Text */}
-            <div>
-              <Badge
-                variant="secondary"
-                className="mb-6 gap-2"
+            <div className="lg:col-span-7">
+              <p
+                className="text-label uppercase text-muted-foreground mb-6"
                 style={{ animation: "landing-fade-in-up 0.6s ease-out both" }}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                Open Source & Self-Hostable
-              </Badge>
+                Open Source · Self-Hostable
+              </p>
 
               <h1
-                className="text-4xl sm:text-5xl lg:text-[3.5rem] font-extrabold leading-[1.08] tracking-tight text-foreground mb-6"
-                style={{
-                  fontFamily:
-                    "var(--font-syne), var(--font-geist-sans), system-ui",
-                  animation: "landing-fade-in-up 0.6s ease-out 0.1s both",
-                }}
+                className="text-display text-foreground mb-6 max-w-2xl"
+                style={{ animation: "landing-fade-in-up 0.6s ease-out 0.1s both" }}
               >
-                Open-source AI video clipper
-                <br />
-                for better shorts
+                Open-source AI video clipper for better shorts
               </h1>
 
               <p
-                className="text-base sm:text-lg text-muted-foreground leading-relaxed max-w-lg mb-10"
-                style={{
-                  animation: "landing-fade-in-up 0.6s ease-out 0.2s both",
-                }}
+                className="text-body text-muted-foreground max-w-lg mb-10"
+                style={{ animation: "landing-fade-in-up 0.6s ease-out 0.2s both" }}
               >
                 Turn long videos into captioned YouTube Shorts, TikToks, and Reels
                 with AI-assisted highlight detection, virality scoring, and
@@ -434,21 +401,19 @@ export default function LandingPage() {
               </p>
 
               <div
-                className="flex flex-wrap gap-3 mb-10"
-                style={{
-                  animation: "landing-fade-in-up 0.6s ease-out 0.3s both",
-                }}
+                className="flex flex-wrap gap-4 mb-10"
+                style={{ animation: "landing-fade-in-up 0.6s ease-out 0.3s both" }}
               >
                 {authEnabled ? (
                   <Link href="/sign-up">
-                    <Button size="lg" className="px-8 h-12 text-sm">
+                    <Button size="lg">
                       Start Clipping
                       <ArrowRight className="w-4 h-4" />
                     </Button>
                   </Link>
                 ) : (
                   <a href={HOSTED_APP_URL} target="_blank" rel="noopener noreferrer">
-                    <Button size="lg" className="px-8 h-12 text-sm">
+                    <Button size="lg">
                       Use Hosted App
                       <ExternalLink className="w-4 h-4" />
                     </Button>
@@ -459,7 +424,7 @@ export default function LandingPage() {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  <Button variant="outline" size="lg" className="px-8 h-12 text-sm">
+                  <Button variant="outline" size="lg">
                     <Github className="w-4 h-4" />
                     View Source
                   </Button>
@@ -482,17 +447,15 @@ export default function LandingPage() {
               </div>
 
               <div
-                className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground"
-                style={{
-                  animation: "landing-fade-in-up 0.6s ease-out 0.4s both",
-                }}
+                className="flex flex-wrap gap-x-6 gap-y-2 text-small text-muted-foreground"
+                style={{ animation: "landing-fade-in-up 0.6s ease-out 0.4s both" }}
               >
                 {[
                   { icon: ScanFace, label: "9:16 Auto-Crop" },
                   { icon: Type, label: "Word-Synced Captions" },
                   { icon: Target, label: "Virality Scoring" },
                 ].map(({ icon: Icon, label }) => (
-                  <div key={label} className="flex items-center gap-1.5">
+                  <div key={label} className="flex items-center gap-2">
                     <Icon className="w-3.5 h-3.5" />
                     {label}
                   </div>
@@ -500,62 +463,42 @@ export default function LandingPage() {
               </div>
             </div>
 
-            {/* Right: Visual */}
+            {/* Right: Visual — offset, skips column 8 for a real stagger */}
             <div
-              className="relative flex justify-center lg:justify-end"
+              className="lg:col-span-4 lg:col-start-9 lg:mt-16 flex justify-center lg:justify-start"
               style={{ animation: "landing-fade-in-up 0.8s ease-out 0.3s both" }}
             >
               <HeroVisual />
             </div>
           </div>
         </div>
-
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 hidden md:block">
-          <ChevronDown className="w-5 h-5 text-muted-foreground/30 animate-bounce" />
-        </div>
       </section>
 
       <Separator />
 
       {/* ─── HOW IT WORKS ─── */}
-      <section id="how-it-works" className="py-20 md:py-28 bg-muted/40">
+      <section id="how-it-works" className="py-20 md:py-28 bg-muted">
         <div className="max-w-6xl mx-auto px-6">
-          <ScrollReveal className="text-center mb-14">
-            <p className="text-xs font-semibold tracking-[0.2em] uppercase text-muted-foreground mb-3">
+          <ScrollReveal className="mb-16">
+            <p className="text-label uppercase text-muted-foreground mb-3">
               How It Works
             </p>
-            <h2
-              className="text-3xl sm:text-4xl font-bold tracking-tight"
-              style={{
-                fontFamily:
-                  "var(--font-syne), var(--font-geist-sans), system-ui",
-              }}
-            >
-              Three steps. Zero effort.
-            </h2>
+            <h2 className="text-headline">Three steps. Zero effort.</h2>
           </ScrollReveal>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid md:grid-cols-3 gap-5">
             {STEPS.map((step, i) => (
-              <ScrollReveal key={step.num} delay={i * 0.1}>
-                <Card className="h-full py-0 gap-0 hover:shadow-md transition-shadow duration-300">
+              <ScrollReveal key={step.num} delay={i * 0.1} className={i === 1 ? "md:mt-12" : ""}>
+                <Card className="h-full py-0 gap-0 border border-border hover:border-foreground transition-colors">
                   <CardContent className="p-8">
-                    <span
-                      className="text-6xl font-black leading-none block mb-6 text-muted-foreground/25 select-none"
-                      style={{ fontFamily: "var(--font-syne), system-ui" }}
-                    >
+                    <span className="text-display text-muted-foreground leading-none block mb-6 select-none">
                       {step.num}
                     </span>
-                    <div className="w-10 h-10 rounded-xl bg-secondary flex items-center justify-center mb-5">
+                    <div className="w-10 h-10 bg-secondary flex items-center justify-center mb-6">
                       <step.icon className="w-5 h-5 text-foreground" />
                     </div>
-                    <h3
-                      className="text-lg font-semibold mb-2"
-                      style={{ fontFamily: "var(--font-syne), system-ui" }}
-                    >
-                      {step.title}
-                    </h3>
-                    <p className="text-sm text-muted-foreground leading-relaxed">
+                    <h3 className="text-title mb-2">{step.title}</h3>
+                    <p className="text-small text-muted-foreground leading-relaxed">
                       {step.description}
                     </p>
                   </CardContent>
@@ -571,20 +514,14 @@ export default function LandingPage() {
       {/* ─── FEATURES ─── */}
       <section id="features" className="py-20 md:py-28">
         <div className="max-w-6xl mx-auto px-6">
-          <ScrollReveal className="text-center mb-14">
-            <p className="text-xs font-semibold tracking-[0.2em] uppercase text-muted-foreground mb-3">
+          <ScrollReveal className="mb-16">
+            <p className="text-label uppercase text-muted-foreground mb-3">
               Features
             </p>
-            <h2
-              className="text-3xl sm:text-4xl font-bold tracking-tight mb-4"
-              style={{
-                fontFamily:
-                  "var(--font-syne), var(--font-geist-sans), system-ui",
-              }}
-            >
+            <h2 className="text-headline mb-4">
               Everything you need to go viral
             </h2>
-            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            <p className="text-body text-muted-foreground max-w-md">
               Professional-grade video clipping with AI intelligence at every
               step of the pipeline.
             </p>
@@ -593,13 +530,13 @@ export default function LandingPage() {
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {FEATURES.map((feature, i) => (
               <ScrollReveal key={feature.title} delay={i * 0.07}>
-                <Card className="h-full py-0 gap-0 hover:shadow-md transition-all duration-300 hover:-translate-y-1">
+                <Card className="h-full py-0 gap-0 border border-border hover:border-foreground transition-colors">
                   <CardContent className="p-6">
-                    <div className="w-10 h-10 rounded-xl bg-secondary flex items-center justify-center mb-4">
+                    <div className="w-10 h-10 bg-secondary flex items-center justify-center mb-4">
                       <feature.icon className="w-5 h-5 text-foreground" />
                     </div>
-                    <h3 className="font-semibold mb-2">{feature.title}</h3>
-                    <p className="text-sm text-muted-foreground leading-relaxed">
+                    <h3 className="text-title mb-2">{feature.title}</h3>
+                    <p className="text-small text-muted-foreground leading-relaxed">
                       {feature.description}
                     </p>
                   </CardContent>
@@ -613,32 +550,16 @@ export default function LandingPage() {
       <Separator />
 
       {/* ─── PRICING ─── */}
-      <section id="pricing" className="relative py-20 md:py-28 bg-muted/40 overflow-hidden">
-        {/* Decorative background grain */}
-        <div
-          className="absolute inset-0 opacity-[0.03] pointer-events-none"
-          style={{
-            backgroundImage:
-              "radial-gradient(circle at 2px 2px, currentColor 0.5px, transparent 0)",
-            backgroundSize: "24px 24px",
-          }}
-        />
-
-        <div className="relative max-w-5xl mx-auto px-6">
-          <ScrollReveal className="text-center mb-16">
-            <p className="text-xs font-semibold tracking-[0.2em] uppercase text-muted-foreground mb-3">
+      <section id="pricing" className="py-20 md:py-28 bg-muted">
+        <div className="max-w-5xl mx-auto px-6">
+          <ScrollReveal className="mb-16">
+            <p className="text-label uppercase text-muted-foreground mb-3">
               Pricing
             </p>
-            <h2
-              className="text-3xl sm:text-4xl font-bold tracking-tight mb-4"
-              style={{
-                fontFamily:
-                  "var(--font-syne), var(--font-geist-sans), system-ui",
-              }}
-            >
+            <h2 className="text-headline mb-4">
               Simple pricing, no surprises
             </h2>
-            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            <p className="text-body text-muted-foreground max-w-md">
               Start free. Upgrade when you need more generations.
               Self-hosters get everything free, always.
             </p>
@@ -648,33 +569,23 @@ export default function LandingPage() {
             {getPlans().map((plan, i) => (
               <ScrollReveal key={plan.name} delay={i * 0.12}>
                 <Card
-                  className={`relative py-0 gap-0 transition-all duration-300 hover:shadow-lg ${
+                  className={`py-0 gap-0 border transition-colors ${
                     plan.highlighted
-                      ? "bg-primary text-primary-foreground border-primary shadow-xl md:-mt-4 md:mb-4"
-                      : "hover:-translate-y-1"
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border hover:border-foreground"
                   }`}
                 >
-                  {plan.highlighted && (
-                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2">
-                      <Badge className="bg-foreground text-background border-0 shadow-md gap-1.5 px-3 py-1">
-                        <Zap className="w-3 h-3" />
-                        Most Popular
-                      </Badge>
-                    </div>
-                  )}
-
                   <CardContent className="p-8">
+                    {plan.highlighted && (
+                      <p className="text-label uppercase mb-4">Most Popular</p>
+                    )}
+
                     <div className="mb-6">
-                      <h3
-                        className="text-lg font-semibold mb-1"
-                        style={{ fontFamily: "var(--font-syne), system-ui" }}
-                      >
-                        {plan.name}
-                      </h3>
+                      <h3 className="text-title mb-1">{plan.name}</h3>
                       <p
-                        className={`text-sm ${
+                        className={`text-small ${
                           plan.highlighted
-                            ? "text-primary-foreground/70"
+                            ? "text-primary-foreground"
                             : "text-muted-foreground"
                         }`}
                       >
@@ -683,16 +594,11 @@ export default function LandingPage() {
                     </div>
 
                     <div className="flex items-baseline gap-1 mb-8">
+                      <span className="text-headline">{plan.price}</span>
                       <span
-                        className="text-5xl font-extrabold tracking-tight"
-                        style={{ fontFamily: "var(--font-syne), system-ui" }}
-                      >
-                        {plan.price}
-                      </span>
-                      <span
-                        className={`text-sm ${
+                        className={`text-small ${
                           plan.highlighted
-                            ? "text-primary-foreground/60"
+                            ? "text-primary-foreground"
                             : "text-muted-foreground"
                         }`}
                       >
@@ -702,19 +608,17 @@ export default function LandingPage() {
 
                     <ul className="space-y-3 mb-8">
                       {plan.features.map((feature) => (
-                        <li key={feature} className="flex items-start gap-3 text-sm">
+                        <li key={feature} className="flex items-start gap-3 text-small">
                           <Check
                             className={`w-4 h-4 mt-0.5 shrink-0 ${
                               plan.highlighted
-                                ? "text-primary-foreground/80"
+                                ? "text-primary-foreground"
                                 : "text-muted-foreground"
                             }`}
                           />
                           <span
                             className={
-                              plan.highlighted
-                                ? "text-primary-foreground/90"
-                                : ""
+                              plan.highlighted ? "text-primary-foreground" : ""
                             }
                           >
                             {feature}
@@ -729,11 +633,7 @@ export default function LandingPage() {
                         target="_blank"
                         rel="noopener noreferrer"
                       >
-                        <Button
-                          className="w-full h-11 text-sm"
-                          variant="outline"
-                          size="lg"
-                        >
+                        <Button className="w-full" variant="outline" size="lg">
                           <Github className="w-4 h-4" />
                           {plan.cta}
                           <ExternalLink className="w-3.5 h-3.5 opacity-50" />
@@ -742,9 +642,9 @@ export default function LandingPage() {
                     ) : authEnabled ? (
                       <Link href="/sign-up">
                         <Button
-                          className={`w-full h-11 text-sm ${
+                          className={`w-full ${
                             plan.highlighted
-                              ? "bg-primary-foreground text-primary hover:bg-primary-foreground/90"
+                              ? "bg-primary-foreground text-primary hover:bg-foreground hover:text-background"
                               : ""
                           }`}
                           variant={plan.highlighted ? "secondary" : "default"}
@@ -761,9 +661,9 @@ export default function LandingPage() {
                         rel="noopener noreferrer"
                       >
                         <Button
-                          className={`w-full h-11 text-sm ${
+                          className={`w-full ${
                             plan.highlighted
-                              ? "bg-primary-foreground text-primary hover:bg-primary-foreground/90"
+                              ? "bg-primary-foreground text-primary hover:bg-foreground hover:text-background"
                               : ""
                           }`}
                           variant={plan.highlighted ? "secondary" : "default"}
@@ -781,7 +681,7 @@ export default function LandingPage() {
           </div>
 
           <ScrollReveal delay={0.3}>
-            <p className="text-center text-xs text-muted-foreground mt-10 max-w-md mx-auto">
+            <p className="text-small text-muted-foreground mt-10 max-w-md">
               Self-hosting? All features are free and unlimited.{" "}
               <a
                 href="#open-source"
@@ -798,32 +698,27 @@ export default function LandingPage() {
       <Separator />
 
       {/* ─── OPEN SOURCE ─── */}
-      <section id="open-source" className="py-20 md:py-28 bg-muted/40">
+      <section id="open-source" className="py-20 md:py-28 bg-muted">
         <div className="max-w-3xl mx-auto px-6">
-          <ScrollReveal className="text-center mb-10">
+          <ScrollReveal className="mb-10">
             <Badge variant="outline" className="mb-6 gap-1.5">
               <Github className="w-3.5 h-3.5" />
               AGPL-3.0 Licensed
             </Badge>
-            <h2
-              className="text-3xl sm:text-4xl font-bold tracking-tight mb-4"
-              style={{ fontFamily: "var(--font-syne), system-ui" }}
-            >
-              Built in the open
-            </h2>
-            <p className="text-sm text-muted-foreground max-w-lg mx-auto">
+            <h2 className="text-headline mb-4">Built in the open</h2>
+            <p className="text-body text-muted-foreground max-w-lg">
               Fully open source. Self-host on your infrastructure, contribute
               features, or fork it and make it yours.
             </p>
           </ScrollReveal>
 
           <ScrollReveal delay={0.1}>
-            <Card className="py-0 gap-0">
+            <Card className="py-0 gap-0 border border-border">
               <CardContent className="p-6 md:p-8">
-                <p className="text-xs font-medium text-muted-foreground mb-3">
-                  Get running in 30 seconds:
+                <p className="text-label uppercase text-muted-foreground mb-3">
+                  Get running in 30 seconds
                 </p>
-                <div className="bg-primary text-primary-foreground rounded-lg p-5 font-mono text-sm leading-loose overflow-x-auto">
+                <div className="bg-foreground text-background p-6 font-mono text-small leading-loose overflow-x-auto">
                   <div>
                     <span className="opacity-50">$</span>{" "}
                     git clone{" "}
@@ -881,14 +776,14 @@ export default function LandingPage() {
       {/* ─── GUIDES ─── */}
       <section id="guides" className="py-20 md:py-28">
         <div className="mx-auto max-w-6xl px-6">
-          <ScrollReveal className="mb-12 text-center">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+          <ScrollReveal className="mb-12">
+            <p className="mb-3 text-label uppercase text-muted-foreground">
               Guides & Comparisons
             </p>
-            <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
+            <h2 className="text-headline">
               Learn the complete clipping workflow
             </h2>
-            <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-muted-foreground">
+            <p className="mt-4 max-w-2xl text-body text-muted-foreground">
               Practical, source-backed pages for choosing a video clipper, self-hosting SupoClip,
               and turning long recordings into short-form content.
             </p>
@@ -898,14 +793,14 @@ export default function LandingPage() {
               <ScrollReveal key={resource.href} delay={index * 0.08}>
                 <Link
                   href={resource.href}
-                  className="group block h-full rounded-lg border bg-card p-6 transition-all hover:-translate-y-0.5 hover:border-foreground/25 hover:shadow-md"
+                  className="group block h-full border border-border bg-card p-6 hover:border-foreground transition-colors"
                 >
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                  <p className="text-label uppercase text-muted-foreground">
                     {resource.eyebrow}
                   </p>
-                  <h3 className="mt-3 text-xl font-bold tracking-tight">{resource.title}</h3>
-                  <p className="mt-3 text-sm leading-7 text-muted-foreground">{resource.description}</p>
-                  <span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold">
+                  <h3 className="mt-4 text-title">{resource.title}</h3>
+                  <p className="mt-4 text-small text-muted-foreground">{resource.description}</p>
+                  <span className="mt-6 inline-flex items-center gap-2 text-small font-semibold">
                     Read guide <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                   </span>
                 </Link>
@@ -915,31 +810,24 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <Separator />
-
       {/* ─── FINAL CTA ─── */}
-      <section className="py-20 md:py-28">
-        <ScrollReveal className="max-w-2xl mx-auto px-6 text-center">
-          <h2
-            className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight mb-6"
-            style={{ fontFamily: "var(--font-syne), system-ui" }}
-          >
-            Ready to clip?
-          </h2>
-          <p className="text-base text-muted-foreground mb-8">
+      <section className="bg-foreground text-background py-24 md:py-32">
+        <ScrollReveal className="max-w-6xl mx-auto px-6">
+          <h2 className="text-headline mb-6 max-w-xl">Ready to clip?</h2>
+          <p className="text-body mb-8 max-w-md">
             Turn your next video into scroll-stopping shorts. Free, open source,
             no credit card required.
           </p>
           {authEnabled ? (
             <Link href="/sign-up">
-              <Button size="lg" className="px-10 h-12 text-sm">
+              <Button size="lg">
                 Get Started Free
                 <ArrowRight className="w-4 h-4" />
               </Button>
             </Link>
           ) : (
             <a href={HOSTED_APP_URL} target="_blank" rel="noopener noreferrer">
-              <Button size="lg" className="px-10 h-12 text-sm">
+              <Button size="lg">
                 Open Hosted App
                 <ExternalLink className="w-4 h-4" />
               </Button>
@@ -948,9 +836,8 @@ export default function LandingPage() {
         </ScrollReveal>
       </section>
 
-
       {/* ─── FOOTER ─── */}
-      <footer className="border-t py-8 px-6">
+      <footer className="border-t border-border py-8 px-6">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <Image
@@ -958,16 +845,10 @@ export default function LandingPage() {
               alt="SupoClip"
               width={24}
               height={24}
-              className="rounded-md"
             />
-            <span
-              className="text-sm font-semibold"
-              style={{ fontFamily: "var(--font-syne), system-ui" }}
-            >
-              SupoClip
-            </span>
+            <span className="text-title">SupoClip</span>
           </div>
-          <nav aria-label="Footer navigation" className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
+          <nav aria-label="Footer navigation" className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-small text-muted-foreground">
             <Link href="/ai-video-clipper" className="hover:text-foreground transition-colors">AI clipper</Link>
             <Link href="/open-source-video-clipper" className="hover:text-foreground transition-colors">Open source</Link>
             <Link href="/youtube-shorts-clipper" className="hover:text-foreground transition-colors">YouTube Shorts</Link>
@@ -1074,33 +955,33 @@ function HeroVisual() {
 
   return (
     <div className="relative w-full max-w-[360px]">
-      <Card className="py-0 gap-0 overflow-hidden shadow-xl border-border/60">
+      <Card className="py-0 gap-0 overflow-hidden border border-border">
         <CardContent className="p-4">
           {/* Source video being clipped */}
           <a
             href={DEMO_SOURCE.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-2.5 group"
+            className="flex items-center gap-2 group"
           >
-            <div className="w-8 h-8 rounded-md bg-red-500/10 flex items-center justify-center shrink-0">
-              <Youtube className="w-4 h-4 text-red-500" />
+            <div className="w-8 h-8 bg-secondary flex items-center justify-center shrink-0">
+              <Youtube className="w-4 h-4 text-foreground" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium truncate group-hover:underline">
+              <p className="text-small font-medium truncate group-hover:underline">
                 {DEMO_SOURCE.title}
               </p>
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-label uppercase text-muted-foreground">
                 youtube.com · long-form source
               </p>
             </div>
-            <ExternalLink className="w-3.5 h-3.5 text-muted-foreground/60 shrink-0" />
+            <ExternalLink className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
           </a>
 
           {/* Scissors divider */}
-          <div className="flex items-center gap-2 my-3.5">
+          <div className="flex items-center gap-2 my-4">
             <div className="flex-1 h-px bg-border" />
-            <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <span className="flex items-center gap-1.5 text-label uppercase text-muted-foreground">
               <Scissors className="w-3 h-3 rotate-90" />
               {DEMO_CLIPS.length} clips found
             </span>
@@ -1109,7 +990,7 @@ function HeroVisual() {
 
           {/* Player */}
           <div
-            className="relative mx-auto w-[214px] rounded-xl overflow-hidden bg-black ring-1 ring-border shadow-lg"
+            className="relative mx-auto w-[214px] overflow-hidden bg-black border border-border"
             style={{ aspectRatio: "9/16" }}
           >
             {DEMO_CLIPS.map((clip, i) => (
@@ -1144,7 +1025,7 @@ function HeroVisual() {
               className="absolute inset-0 flex items-center justify-center focus:outline-none"
             >
               <span
-                className={`w-11 h-11 rounded-full bg-background/85 backdrop-blur-sm flex items-center justify-center shadow-lg transition-opacity duration-200 ${
+                className={`w-11 h-11 rounded-full bg-background/85 flex items-center justify-center transition-opacity duration-200 ${
                   playing ? "opacity-0" : "opacity-100"
                 }`}
               >
@@ -1157,7 +1038,7 @@ function HeroVisual() {
               type="button"
               onClick={() => setMuted((m) => !m)}
               aria-label={muted ? "Unmute clip" : "Mute clip"}
-              className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/45 backdrop-blur-sm flex items-center justify-center text-white/90 hover:bg-black/65 transition-colors"
+              className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/45 flex items-center justify-center text-white/90 hover:bg-black/65 transition-colors"
             >
               {muted ? (
                 <VolumeX className="w-3.5 h-3.5" />
@@ -1168,10 +1049,10 @@ function HeroVisual() {
 
             {/* Timestamp + progress */}
             <div className="absolute inset-x-0 bottom-0 pt-8 pb-2 px-2.5 bg-gradient-to-t from-black/70 to-transparent pointer-events-none">
-              <p className="text-[10px] font-medium text-white/85 mb-1.5 tabular-nums">
+              <p className="text-[10px] font-medium text-white/85 mb-2 tabular-nums">
                 {DEMO_CLIPS[active].range}
               </p>
-              <div className="h-0.5 rounded-full bg-white/25 overflow-hidden">
+              <div className="h-0.5 bg-white/25 overflow-hidden">
                 <div
                   className="h-full bg-white/90"
                   style={{ width: `${Math.min(progress * 100, 100)}%` }}
@@ -1181,17 +1062,17 @@ function HeroVisual() {
           </div>
 
           {/* Clip list */}
-          <div className="mt-3.5 space-y-1.5">
+          <div className="mt-4 space-y-2">
             {DEMO_CLIPS.map((clip, i) => (
               <button
                 key={clip.src}
                 type="button"
                 onClick={() => setActive(i)}
                 aria-current={i === active}
-                className={`w-full flex items-center gap-2.5 p-1.5 rounded-lg text-left transition-colors ${
+                className={`w-full flex items-center gap-2 p-2 text-left transition-colors ${
                   i === active
-                    ? "bg-muted ring-1 ring-border"
-                    : "hover:bg-muted/60"
+                    ? "bg-secondary border border-border"
+                    : "hover:bg-secondary"
                 }`}
               >
                 <Image
@@ -1199,13 +1080,13 @@ function HeroVisual() {
                   alt=""
                   width={30}
                   height={53}
-                  className="rounded shrink-0 object-cover"
+                  className="shrink-0 object-cover"
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[11px] font-medium leading-tight truncate">
+                  <span className="block text-small font-medium leading-tight truncate">
                     {clip.hook}
                   </span>
-                  <span className="block text-[10px] text-muted-foreground mt-0.5 tabular-nums">
+                  <span className="block text-label text-muted-foreground tabular-nums">
                     {clip.range} · {clip.duration}
                   </span>
                 </span>
@@ -1220,10 +1101,6 @@ function HeroVisual() {
           </div>
         </CardContent>
       </Card>
-
-      {/* Decorative blur spots */}
-      <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-muted/80 blur-3xl -z-10" />
-      <div className="absolute -bottom-8 -left-8 w-24 h-24 rounded-full bg-muted/60 blur-2xl -z-10" />
     </div>
   );
 }

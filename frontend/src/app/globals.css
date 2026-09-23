@@ -209,6 +209,26 @@
 }
 
 
+/* Mobile step-down for the poster-scale type levels — DESIGN.md §3:
+   display-xl -> 56px, display -> 44px, headline -> 32px below the
+   600px grid breakpoint. `@theme inline` bakes these into literal values
+   on the generated .text-* utility classes (not runtime custom
+   properties), so the override has to target the classes directly. */
+@media (max-width: 600px) {
+  .text-display-xl {
+    font-size: 56px;
+    line-height: 56px;
+  }
+  .text-display {
+    font-size: 44px;
+    line-height: 44px;
+  }
+  .text-headline {
+    font-size: 32px;
+    line-height: 36px;
+  }
+}
+
 /* Landing page animations */
 @keyframes landing-fade-in-up {
   from {
