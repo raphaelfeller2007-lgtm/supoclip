@@ -991,16 +991,47 @@ async def get_most_relevant_parts_by_transcript(
     try:
         agent = get_transcript_agent()
         transcript_lines = _parse_transcript_lines(transcript)
+        runtime_config = get_config()
+        provider, _ = _split_llm_name(runtime_config.llm)
 
-        result = await agent.run(
-            build_transcript_analysis_prompt(
-                transcript=transcript,
-                include_broll=include_broll,
-                clip_signals=clip_signals,
-                max_segments=max_segments,
-                target_duration_seconds=target_duration_seconds,
-            )
+        prompt = build_transcript_analysis_prompt(
+            transcript=transcript,
+            include_broll=include_broll,
+            clip_signals=clip_signals,
+            max_segments=max_segments,
+            target_duration_seconds=target_duration_seconds,
         )
+
+        try:
+            result = await agent.run(prompt)
+        except Exception as exc:
+            # Small local models sometimes exhaust the agent's own
+            # output-validation retries on this schema (it's large and
+            # nested). Mirror run_with_llm_fallback's behavior: one retry
+            # with a stricter prompt, then fall back to Gemini if the
+            # provider is Ollama and a Google key is configured, instead of
+            # failing the whole task outright.
+            logger.warning("Transcript analysis agent run failed (%s), retrying", exc)
+            try:
+                result = await agent.run(prompt + _STRICT_JSON_RETRY_SUFFIX)
+            except Exception as retry_exc:
+                if provider != "ollama" or not runtime_config.google_api_key:
+                    raise
+                logger.warning(
+                    "Ollama transcript analysis failed after retry (%s), falling back to Gemini",
+                    retry_exc,
+                )
+                gemini_agent = Agent[None, TranscriptAnalysis](
+                    model=_build_gemini_model(runtime_config),
+                    output_type=TranscriptAnalysis,
+                    system_prompt=transcript_analysis_system_prompt,
+                    output_retries=2,
+                )
+                result = await with_exponential_backoff(
+                    lambda: gemini_agent.run(prompt),
+                    max_retries=4,
+                    retryable=is_rate_limit_error,
+                )
 
         analysis = result.output
         logger.info(
