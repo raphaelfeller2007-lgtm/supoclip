@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from src.services.video_service import VideoService
+from src.clip_cleanup import normalize_clip_cleanup_settings
 from src.clip_source_map import load_clip_source_ranges, save_clip_source_ranges
 from src.video_utils import (
     build_clip_keep_ranges,
@@ -112,7 +113,7 @@ def test_build_clip_keep_ranges_protects_sentence_final_filler(monkeypatch):
         Path("/tmp/demo.mp4"),
         0.0,
         3.7,
-        {"remove_filler_words": True, "filtered_words": []},
+        {"remove_filler_words": True, "filtered_words": ["you know"]},
     )
 
     assert keep_ranges == [(0.0, 3.7)]
@@ -174,6 +175,40 @@ def test_build_clip_keep_ranges_still_removes_safe_mid_clip_filler(monkeypatch):
     )
 
     assert keep_ranges == [(0.0, 0.2), (0.4, 4.0)]
+
+
+def test_build_clip_keep_ranges_low_sensitivity_keeps_hedge_phrase(monkeypatch):
+    """Regression test: low sensitivity should only remove pure disfluencies,
+    not hedge phrases like "you know" that often carry real meaning -- only
+    medium+ sensitivity should start cutting those."""
+    transcript_data = {
+        "words": [
+            {"text": "So", "start": 0, "end": 200},
+            {"text": "you", "start": 200, "end": 400},
+            {"text": "know", "start": 400, "end": 600},
+            {"text": "that's", "start": 600, "end": 900},
+            {"text": "the", "start": 900, "end": 1000},
+            {"text": "whole", "start": 1000, "end": 1300},
+            {"text": "point.", "start": 1300, "end": 1700},
+        ]
+    }
+    monkeypatch.setattr(
+        "src.video_utils.load_cached_transcript_data",
+        lambda _video_path: transcript_data,
+    )
+
+    low_settings = normalize_clip_cleanup_settings(sensitivity=10)
+    medium_settings = normalize_clip_cleanup_settings(sensitivity=50)
+
+    low_keep_ranges = build_clip_keep_ranges(
+        Path("/tmp/demo.mp4"), 0.0, 1.7, low_settings
+    )
+    medium_keep_ranges = build_clip_keep_ranges(
+        Path("/tmp/demo.mp4"), 0.0, 1.7, medium_settings
+    )
+
+    assert low_keep_ranges == [(0.0, 1.7)]
+    assert medium_keep_ranges == [(0.0, 0.2), (0.6, 1.7)]
 
 
 def test_build_clip_keep_ranges_removes_boundary_silence(monkeypatch):

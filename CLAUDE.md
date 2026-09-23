@@ -241,6 +241,7 @@ One line each — full rationale in [docs/development.md](docs/development.md#fe
 - `max_clips`/`target_duration_seconds` are per-request overrides threaded through 5 layers — `/resume` must forward them from saved metadata or silently drops them.
 - SSE initial status reads the cached Redis snapshot, not the DB row — the DB never persists `stage`. On error/cancel, progress freezes at last real % (never resets to 0).
 - Clip-cleanup pause threshold floor is 600ms, not 300ms — 300ms fell inside normal speech gaps and cut continuous speech. Cuts below 1.2s also require a sentence-boundary word before them.
+- Clip-cleanup filler-word removal is 3-tiered by sensitivity, not one list — `DEFAULT_FILTERED_WORDS` (pure disfluencies) always applies once cleanup is on, `HEDGE_FILTERED_WORDS` ("you know"/"i mean"/etc., which can carry real meaning) needs sensitivity ≥40, `AGGRESSIVE_FILTERED_WORDS` needs ≥75 — don't collapse these back into one always-on list, that's what made low sensitivity cut meaningful phrases.
 - Task delete is soft (`deleted_at`) — every task query must filter `deleted_at IS NULL`, or trashed tasks leak back into lists.
 - `enforce_size_cap()` and `build_audio_output_args()` are the *only* places that should re-encode-for-size or build `loudnorm` args — hand-rolling either at a new call site breaks the 300MB cap or loudness normalization silently.
 - `EXPORT_PRESETS` dict order is display order and `preset=` values are persisted externally — never reorder or rename existing entries.

@@ -8,9 +8,9 @@ from typing import Any, Optional
 
 DEFAULT_PAUSE_THRESHOLD_MS = 900
 
-# Low-risk disfluencies: essentially never carry meaning on their own, safe to
-# remove regardless of sensitivity. This is the base list used whenever
-# remove_filler_words is on (legacy boolean path and low/medium sensitivity).
+# Pure non-lexical disfluencies: never carry meaning on their own, safe to
+# remove regardless of sensitivity or which path enabled cleanup (sensitivity
+# slider at any level above 0, or the legacy remove_filler_words boolean).
 DEFAULT_FILTERED_WORDS = [
     "um",
     "umm",
@@ -22,6 +22,13 @@ DEFAULT_FILTERED_WORDS = [
     "mhm",
     "mm-hmm",
     "uh huh",
+]
+
+# Hedge phrases: common as filler, but unlike the pure disfluencies above they
+# frequently carry real rhetorical weight ("you know, that's the whole
+# point"), so they're only cut once sensitivity crosses
+# _HEDGE_WORDS_SENSITIVITY_THRESHOLD rather than always-on.
+HEDGE_FILTERED_WORDS = [
     "you know",
     "i mean",
     "sort of",
@@ -54,6 +61,7 @@ MAX_SENSITIVITY = 100
 # normal speech gaps while still much shorter than a true dead-air pause.
 _SENSITIVITY_PAUSE_THRESHOLD_MS_AT_MIN = 1500
 _SENSITIVITY_PAUSE_THRESHOLD_MS_AT_MAX = 600
+_HEDGE_WORDS_SENSITIVITY_THRESHOLD = 40
 _AGGRESSIVE_WORDS_SENSITIVITY_THRESHOLD = 75
 
 
@@ -119,9 +127,12 @@ def pause_threshold_ms_to_sensitivity(pause_threshold_ms: int) -> int:
 
 
 def sensitivity_extra_filler_words(sensitivity: int) -> list[str]:
+    extra: list[str] = []
+    if sensitivity >= _HEDGE_WORDS_SENSITIVITY_THRESHOLD:
+        extra.extend(HEDGE_FILTERED_WORDS)
     if sensitivity >= _AGGRESSIVE_WORDS_SENSITIVITY_THRESHOLD:
-        return list(AGGRESSIVE_FILTERED_WORDS)
-    return []
+        extra.extend(AGGRESSIVE_FILTERED_WORDS)
+    return extra
 
 
 def normalize_clip_cleanup_settings(

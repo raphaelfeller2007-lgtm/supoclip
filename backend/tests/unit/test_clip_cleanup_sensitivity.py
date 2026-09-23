@@ -35,6 +35,28 @@ def test_sensitivity_high_adds_aggressive_filler_words():
     assert "basically" in high["filtered_words"]
 
 
+def test_sensitivity_low_does_not_add_hedge_phrases():
+    """Low sensitivity should only remove pure disfluencies (handled via the
+    always-on DEFAULT_FILTERED_WORDS base list in video_utils.py), not hedge
+    phrases like "you know"/"i guess" that often carry real meaning."""
+    low = normalize_clip_cleanup_settings(sensitivity=10)
+
+    assert "you know" not in low["filtered_words"]
+    assert "i guess" not in low["filtered_words"]
+
+
+def test_sensitivity_medium_adds_hedge_phrases_but_not_aggressive():
+    medium = normalize_clip_cleanup_settings(sensitivity=50)
+    high = normalize_clip_cleanup_settings(sensitivity=90)
+
+    assert "you know" in medium["filtered_words"]
+    assert "i guess" in medium["filtered_words"]
+    assert "basically" not in medium["filtered_words"]
+
+    assert "you know" in high["filtered_words"]
+    assert "basically" in high["filtered_words"]
+
+
 def test_sensitivity_none_falls_back_to_legacy_booleans():
     """Backward compatibility: omitting sensitivity keeps the old explicit
     cut_long_pauses/pause_threshold_ms/remove_filler_words behavior."""
