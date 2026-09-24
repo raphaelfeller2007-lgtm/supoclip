@@ -374,3 +374,29 @@ def test_apply_broll_to_clip_fails_without_writing_output_when_all_insertions_fa
 
     assert success is False
     assert not output_path.exists()
+
+
+def test_dominant_face_cluster_ignores_the_other_person():
+    """Regression test: averaging two side-by-side faces lands the crop in
+    the gap between them, not on either person. The dominant cluster (by
+    total area*confidence weight) should be kept whole and the other person's
+    detections dropped entirely, not blended in."""
+    frame_width = 1920
+    left_person = [(300, 500, 40000, 0.9) for _ in range(5)]
+    right_person = [(1600, 520, 10000, 0.6) for _ in range(2)]
+
+    dominant = video_utils.dominant_face_cluster(
+        left_person + right_person, frame_width
+    )
+
+    assert dominant == left_person
+
+
+def test_dominant_face_cluster_keeps_single_persons_jitter_together():
+    """A single person's head jitter shouldn't be split into separate clusters."""
+    frame_width = 1920
+    faces = [(300, 500, 40000, 0.9), (330, 505, 39000, 0.88), (280, 495, 41000, 0.91)]
+
+    dominant = video_utils.dominant_face_cluster(faces, frame_width)
+
+    assert dominant == faces

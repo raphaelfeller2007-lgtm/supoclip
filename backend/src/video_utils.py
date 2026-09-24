@@ -846,6 +846,14 @@ def detect_optimal_crop_region(
 
         # Calculate crop position
         if face_centers:
+            # Averaging every detection blindly is what puts the crop on blank
+            # space between two people: two side-by-side faces each pull the
+            # mean toward the gap, not toward either person. Cluster by
+            # horizontal position first and keep only the most prominent
+            # cluster (the subject actually being framed), then weight-average
+            # within it.
+            face_centers = dominant_face_cluster(face_centers, original_width)
+
             # Use weighted average of face centers with temporal consistency
             total_weight = sum(
                 area * confidence for _, _, area, confidence in face_centers
@@ -1179,6 +1187,47 @@ def filter_face_outliers(
     except Exception as e:
         logger.warning(f"Error filtering face outliers: {e}")
         return face_centers
+
+
+def dominant_face_cluster(
+    face_centers: List[Tuple[int, int, int, float]],
+    frame_width: int,
+    gap_frac: float = 0.12,
+) -> List[Tuple[int, int, int, float]]:
+    """Group detections by horizontal position and return only the dominant group.
+
+    `filter_face_outliers` only drops wild single-frame misfires (>2 std-dev);
+    it does nothing when a clip legitimately shows two people side by side,
+    since both are "normal" detections. Blending both into one weighted
+    average then lands the crop in the gap between them rather than on
+    either person. Splitting on any x-gap wider than `gap_frac` of the frame
+    (comfortably bigger than one person's head jitter, smaller than the
+    separation between two distinct people) and keeping only the
+    highest-total-weight group keeps the crop locked onto a single,
+    consistently-framed subject.
+    """
+    if len(face_centers) <= 1 or frame_width <= 0:
+        return face_centers
+
+    ordered = sorted(face_centers, key=lambda f: f[0])
+    gap_threshold = max(30.0, frame_width * gap_frac)
+
+    groups: List[List[Tuple[int, int, int, float]]] = [[ordered[0]]]
+    for face in ordered[1:]:
+        if face[0] - groups[-1][-1][0] > gap_threshold:
+            groups.append([face])
+        else:
+            groups[-1].append(face)
+
+    if len(groups) == 1:
+        return face_centers
+
+    dominant = max(groups, key=lambda g: sum(area * conf for _, _, area, conf in g))
+    logger.info(
+        "Dominant face cluster: %d of %d detections across %d cluster(s)",
+        len(dominant), len(face_centers), len(groups),
+    )
+    return dominant
 
 
 def run_ffmpeg_command(command: List[str], timeout: int = 900) -> subprocess.CompletedProcess:
