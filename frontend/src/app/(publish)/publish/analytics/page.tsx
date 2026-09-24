@@ -11,6 +11,7 @@ import type { Channel, ChannelAnalytics } from "@/lib/publish-types";
 import { BarChart3 } from "lucide-react";
 
 function formatCount(value: number) {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
   return String(value);
