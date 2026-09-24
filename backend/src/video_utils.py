@@ -5464,15 +5464,22 @@ def insert_broll_into_clip(
     transition_duration: float = 0.3,
 ) -> bool:
     """
-    Insert B-roll footage into a clip at a specified timestamp.
+    Overlay B-roll footage onto a clip at a specified timestamp.
+
+    Composited as a translucent, square picture-in-picture near the bottom of
+    the frame (via ffmpeg `overlay`, time-gated with `enable=between(...)`)
+    rather than a full-frame cut — a full-frame swap was replacing the
+    caption/hook burn-in entirely for the B-roll's duration and looked jarring
+    at full opacity/size. The main video's own duration and burned-in layers
+    (captions, hooks) are left untouched; B-roll composites on top of them.
 
     Args:
         main_clip_path: Path to the main video clip
         broll_path: Path to the B-roll video
-        insert_time: When to insert B-roll (seconds from clip start)
+        insert_time: When to show B-roll (seconds from clip start)
         broll_duration: How long to show B-roll (seconds)
         output_path: Where to save the composited clip
-        transition_duration: Crossfade duration (seconds)
+        transition_duration: Fade-in/out duration (seconds)
 
     Returns:
         True if successful
@@ -5498,45 +5505,32 @@ def insert_broll_into_clip(
             max(0.0, actual_broll_duration / 3),
         )
 
-        filter_parts: List[str] = []
-        concat_labels: List[str] = []
-        segment_count = 0
-        if insert_time > 0.05:
-            filter_parts.append(
-                f"[0:v]trim=start=0:end={insert_time:.3f},setpts=PTS-STARTPTS[vpre]"
-            )
-            concat_labels.append("[vpre]")
-            segment_count += 1
+        # Picture-in-picture box: ~50% of the shorter frame dimension, square,
+        # bottom-anchored with a small margin off the edge.
+        box_size = int(min(target_width, target_height) * 0.5)
+        box_size -= box_size % 2  # even dims required by the encoder
+        bottom_margin = int(target_height * 0.04)
 
         broll_filter = (
             f"[1:v]trim=start=0:end={actual_broll_duration:.3f},setpts=PTS-STARTPTS,"
-            f"{resize_for_916_filter(target_width, target_height)}"
+            f"{resize_for_916_filter(box_size, box_size)},"
+            "format=yuva420p,colorchannelmixer=aa=0.5"
         )
         if fade_duration > 0:
             broll_filter += (
-                f",fade=t=in:st=0:d={fade_duration:.3f},"
+                f",fade=t=in:st=0:d={fade_duration:.3f}:alpha=1,"
                 f"fade=t=out:st={max(0.0, actual_broll_duration - fade_duration):.3f}:"
-                f"d={fade_duration:.3f}"
+                f"d={fade_duration:.3f}:alpha=1"
             )
-        filter_parts.append(f"{broll_filter}[vbroll]")
-        concat_labels.append("[vbroll]")
-        segment_count += 1
+        broll_filter += "[vbroll]"
 
-        if main_duration - broll_end_time > 0.05:
-            filter_parts.append(
-                f"[0:v]trim=start={broll_end_time:.3f}:end={main_duration:.3f},"
-                "setpts=PTS-STARTPTS[vpost]"
-            )
-            concat_labels.append("[vpost]")
-            segment_count += 1
-
-        if segment_count > 1:
-            filter_parts.append(
-                f"{''.join(concat_labels)}concat=n={segment_count}:v=1:a=0[v]"
-            )
-            video_label = "[v]"
-        else:
-            video_label = concat_labels[0]
+        overlay_x = f"(main_w-{box_size})/2"
+        overlay_y = f"main_h-{box_size}-{bottom_margin}"
+        filter_complex = (
+            f"{broll_filter};"
+            f"[0:v][vbroll]overlay=x={overlay_x}:y={overlay_y}:"
+            f"enable='between(t,{insert_time:.3f},{broll_end_time:.3f})'[v]"
+        )
 
         command = [
             "ffmpeg",
@@ -5546,9 +5540,9 @@ def insert_broll_into_clip(
             "-i",
             str(broll_path),
             "-filter_complex",
-            ";".join(filter_parts),
+            filter_complex,
             "-map",
-            video_label,
+            "[v]",
             "-map",
             "0:a?",
             "-c:v",
@@ -5571,7 +5565,7 @@ def insert_broll_into_clip(
             return False
 
         logger.info(
-            f"Inserted B-roll at {insert_time:.1f}s ({actual_broll_duration:.1f}s duration): {output_path}"
+            f"Overlaid B-roll at {insert_time:.1f}s ({actual_broll_duration:.1f}s duration): {output_path}"
         )
         return True
 

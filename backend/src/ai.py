@@ -573,6 +573,28 @@ _QUALITY_OLLAMA_MODEL_OVERRIDES = {
 }
 
 
+# Ollama's OpenAI-compatible endpoint defaults to a small context window
+# (commonly 2048-4096 tokens) unless `num_ctx` is passed explicitly, which
+# silently truncates the *input* on long prompts rather than erroring — a
+# 30-minute transcript is easily 6000+ tokens on its own, before the system
+# prompt and rules text, so the model only ever "sees" the first few minutes
+# and can't find segments past that point. Size the window off the actual
+# prompt instead of trusting the server default.
+_OLLAMA_NUM_CTX_FLOOR = 4096
+_OLLAMA_NUM_CTX_CEILING = 32768
+
+
+def _estimate_ollama_num_ctx(prompt_text: str, reserved_output_tokens: int = 4000) -> int:
+    """Rough token estimate (~4 chars/token for English) plus output headroom,
+    clamped to a floor/ceiling that keeps small local models from either
+    truncating long transcripts or requesting an unreasonable amount of VRAM."""
+    estimated_input_tokens = max(1, len(prompt_text) // 4)
+    return max(
+        _OLLAMA_NUM_CTX_FLOOR,
+        min(_OLLAMA_NUM_CTX_CEILING, estimated_input_tokens + reserved_output_tokens),
+    )
+
+
 def _build_ollama_model(runtime_config: Config, model_override: Optional[str] = None) -> OllamaModel:
     return OllamaModel(
         model_override or runtime_config.ollama_model,
@@ -1002,8 +1024,14 @@ async def get_most_relevant_parts_by_transcript(
             target_duration_seconds=target_duration_seconds,
         )
 
+        run_model_settings = (
+            {"extra_body": {"options": {"num_ctx": _estimate_ollama_num_ctx(prompt)}}}
+            if provider == "ollama"
+            else None
+        )
+
         try:
-            result = await agent.run(prompt)
+            result = await agent.run(prompt, model_settings=run_model_settings)
         except Exception as exc:
             # Small local models sometimes exhaust the agent's own
             # output-validation retries on this schema (it's large and
@@ -1013,7 +1041,13 @@ async def get_most_relevant_parts_by_transcript(
             # failing the whole task outright.
             logger.warning("Transcript analysis agent run failed (%s), retrying", exc)
             try:
-                result = await agent.run(prompt + _STRICT_JSON_RETRY_SUFFIX)
+                retry_prompt = prompt + _STRICT_JSON_RETRY_SUFFIX
+                retry_model_settings = (
+                    {"extra_body": {"options": {"num_ctx": _estimate_ollama_num_ctx(retry_prompt)}}}
+                    if provider == "ollama"
+                    else None
+                )
+                result = await agent.run(retry_prompt, model_settings=retry_model_settings)
             except Exception as retry_exc:
                 if provider != "ollama" or not runtime_config.google_api_key:
                     raise
