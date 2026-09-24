@@ -5455,6 +5455,12 @@ def create_9_16_clip(
 # B-Roll compositing functions
 
 
+# B-roll is a brief accent, not a segment swap — cap how long any single
+# insertion stays on screen regardless of what the AI/Pexels-suggested
+# duration says.
+MAX_BROLL_DISPLAY_SECONDS = 2.0
+
+
 def insert_broll_into_clip(
     main_clip_path: Path,
     broll_path: Path,
@@ -5492,6 +5498,7 @@ def insert_broll_into_clip(
         insert_time = max(0.0, min(insert_time, max(0.0, main_duration - 0.5)))
         actual_broll_duration = min(
             max(0.0, broll_duration),
+            MAX_BROLL_DISPLAY_SECONDS,
             source_broll_duration,
             max(0.0, main_duration - insert_time),
         )
