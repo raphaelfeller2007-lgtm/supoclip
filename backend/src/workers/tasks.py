@@ -32,6 +32,8 @@ async def process_video_task(
     social_overlay: Dict[str, Any] | None = None,
     target_duration_seconds: float | None = None,
     max_clips: int | None = None,
+    include_broll: bool = False,
+    broll_settings: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -109,6 +111,8 @@ async def process_video_task(
                 social_overlay=social_overlay,
                 target_duration_seconds=target_duration_seconds,
                 max_clips=max_clips,
+                include_broll=include_broll,
+                broll_settings=broll_settings,
             )
 
             logger.info(f"Task {task_id} completed successfully")

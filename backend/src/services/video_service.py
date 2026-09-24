@@ -3,7 +3,7 @@ Video service - handles video processing business logic.
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable, Awaitable
+from typing import List, Dict, Any, Optional, Callable, Awaitable, Tuple
 import logging
 import json
 import subprocess
@@ -29,6 +29,8 @@ from ..video_utils import (
     trim_keep_ranges_to_duration,
     seconds_to_mmss,
     get_transcript_text_in_range,
+    map_source_time_to_output_seconds,
+    apply_broll_to_clip,
 )
 from ..clip_source_map import (
     normalize_source_ranges,
@@ -216,6 +218,7 @@ class VideoService:
         clip_signals: Optional[str] = None,
         max_clips: Optional[int] = None,
         target_duration_seconds: Optional[float] = None,
+        include_broll: bool = False,
     ) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
@@ -229,6 +232,7 @@ class VideoService:
         runtime_config = get_config()
         relevant_parts = await get_most_relevant_parts_by_transcript(
             transcript,
+            include_broll=include_broll,
             clip_signals=clip_signals,
             max_segments=int(max_clips) if max_clips else runtime_config.max_clips,
             target_duration_seconds=(
@@ -402,6 +406,72 @@ class VideoService:
             return None
 
     @staticmethod
+    async def apply_broll_to_rendered_clip(
+        clip_path: Path,
+        keep_ranges: List[Tuple[float, float]],
+        broll_suggestions: List[Dict[str, Any]],
+        max_insertions: int,
+        min_gap_seconds: float,
+    ) -> None:
+        """Splice fetched B-roll footage into an already-rendered clip, in place.
+
+        broll_suggestions carry absolute source-video timestamps (the same
+        coordinate space as keep_ranges); map_source_time_to_output_seconds
+        projects each into the clip's own post-cut timeline, then
+        max_insertions/min_gap_seconds (per-task B-roll settings) trim the
+        candidates down before compositing with video_utils.apply_broll_to_clip.
+        """
+        mapped: List[Dict[str, Any]] = []
+        for suggestion in broll_suggestions:
+            local_path = suggestion.get("local_path")
+            if not local_path or not Path(local_path).exists():
+                continue
+            output_seconds = map_source_time_to_output_seconds(
+                keep_ranges, suggestion.get("timestamp", 0.0)
+            )
+            if output_seconds is None:
+                continue
+            mapped.append(
+                {
+                    "local_path": local_path,
+                    "timestamp": output_seconds,
+                    "duration": suggestion.get("duration", 3.0),
+                }
+            )
+
+        if not mapped:
+            return
+
+        mapped.sort(key=lambda item: item["timestamp"])
+        selected: List[Dict[str, Any]] = []
+        for item in mapped:
+            if selected and item["timestamp"] - selected[-1]["timestamp"] < min_gap_seconds:
+                continue
+            selected.append(item)
+            if len(selected) >= max_insertions:
+                break
+
+        if not selected:
+            return
+
+        temp_output = clip_path.with_name(f"{clip_path.stem}_broll_{uuid.uuid4().hex[:8]}.mp4")
+        try:
+            success = await run_in_thread(
+                apply_broll_to_clip, clip_path, selected, temp_output
+            )
+            if success and temp_output.exists():
+                temp_output.replace(clip_path)
+                logger.info(
+                    f"Applied {len(selected)} B-roll insertion(s) to {clip_path.name}"
+                )
+            elif temp_output.exists():
+                temp_output.unlink()
+        except Exception as e:
+            logger.error(f"Error applying B-roll to {clip_path.name}: {e}")
+            if temp_output.exists():
+                temp_output.unlink()
+
+    @staticmethod
     async def apply_single_transition(
         prev_clip_path: Path,
         current_clip_info: Dict[str, Any],
@@ -447,6 +517,7 @@ class VideoService:
         should_cancel: Optional[Callable[[], Awaitable[bool]]] = None,
         max_clips: Optional[int] = None,
         target_duration_seconds: Optional[float] = None,
+        include_broll: bool = False,
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
@@ -542,12 +613,18 @@ class VideoService:
                                 self.most_relevant_segments = payload.get(
                                     "most_relevant_segments", []
                                 )
+                                self.broll_opportunities = payload.get(
+                                    "broll_opportunities", []
+                                )
 
                         relevant_parts = _SimpleResult(
                             {
                                 "summary": cached_analysis.get("summary"),
                                 "key_topics": cached_analysis.get("key_topics", []),
                                 "most_relevant_segments": segments,
+                                "broll_opportunities": cached_analysis.get(
+                                    "broll_opportunities", []
+                                ),
                             }
                         )
                 except Exception:
@@ -568,6 +645,7 @@ class VideoService:
                     clip_signals=clip_signals,
                     max_clips=max_clips,
                     target_duration_seconds=target_duration_seconds,
+                    include_broll=include_broll,
                 )
                 VideoService._cache_test_artifact_if_enabled(
                     task_id,
@@ -651,6 +729,14 @@ class VideoService:
                     )
                 ]
 
+            broll_opportunities_json: List[Dict[str, Any]] = []
+            if include_broll and relevant_parts is not None:
+                for opp in getattr(relevant_parts, "broll_opportunities", None) or []:
+                    if hasattr(opp, "model_dump"):
+                        broll_opportunities_json.append(opp.model_dump())
+                    elif isinstance(opp, dict):
+                        broll_opportunities_json.append(opp)
+
             return {
                 "segments": segments_json,
                 "segments_to_render": segments_json,
@@ -659,6 +745,7 @@ class VideoService:
                 "summary": relevant_parts.summary if relevant_parts else None,
                 "key_topics": relevant_parts.key_topics if relevant_parts else None,
                 "transcript": transcript,
+                "broll_opportunities": broll_opportunities_json,
                 "analysis_json": json.dumps(
                     {
                         "summary": relevant_parts.summary if relevant_parts else None,
@@ -666,6 +753,7 @@ class VideoService:
                         if relevant_parts
                         else [],
                         "most_relevant_segments": segments_json,
+                        "broll_opportunities": broll_opportunities_json,
                     }
                 ),
             }

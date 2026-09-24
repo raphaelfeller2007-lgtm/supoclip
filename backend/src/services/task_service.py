@@ -3,7 +3,7 @@ Task service - orchestrates task creation and processing workflow.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +40,7 @@ from ..clip_cleanup import (
     renormalize_stored_cleanup_settings,
 )
 from ..ai import TRANSCRIPT_ANALYSIS_CACHE_VERSION
+from ..broll import fetch_broll_for_opportunities
 from ..clip_source_map import (
     copy_clip_source_ranges,
     load_clip_source_ranges,
@@ -230,6 +231,8 @@ class TaskService:
         social_overlay: Optional[Dict[str, Any]] = None,
         target_duration_seconds: Optional[float] = None,
         max_clips: Optional[int] = None,
+        include_broll: bool = False,
+        broll_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
@@ -324,6 +327,7 @@ class TaskService:
                 should_cancel=should_cancel,
                 max_clips=max_clips,
                 target_duration_seconds=target_duration_seconds,
+                include_broll=include_broll,
             )
             stage_timings["pipeline_seconds"] = round(
                 perf_counter() - pipeline_start, 3
@@ -369,6 +373,21 @@ class TaskService:
             await self.clip_repo.delete_clips_by_task(self.db, task_id)
             await self.task_repo.update_task_clips(self.db, task_id, [])
 
+            # Fetch actual B-roll footage once for the whole video (AI opportunities
+            # carry absolute source timestamps) — each clip below picks out just the
+            # opportunities that fall inside its own range.
+            broll_suggestions: List[Dict[str, Any]] = []
+            if include_broll:
+                raw_broll_opportunities = result.get("broll_opportunities") or []
+                if raw_broll_opportunities and self.config.pexels_api_key:
+                    broll_output_dir = Path(self.config.temp_dir) / "broll_downloads" / task_id
+                    fetched = await fetch_broll_for_opportunities(
+                        raw_broll_opportunities, broll_output_dir
+                    )
+                    broll_suggestions = [suggestion.model_dump() for suggestion in fetched]
+            broll_max_insertions = (broll_settings or {}).get("max_insertions", 3)
+            broll_min_gap_seconds = (broll_settings or {}).get("min_gap_seconds", 6.0)
+
             clip_ids = []
             render_start = perf_counter()
 
@@ -411,6 +430,15 @@ class TaskService:
                 )
                 if clip_info is None:
                     continue  # Skip failed clip
+
+                if broll_suggestions:
+                    await self.video_service.apply_broll_to_rendered_clip(
+                        Path(clip_info["path"]),
+                        clip_info.get("keep_ranges") or [],
+                        broll_suggestions,
+                        max_insertions=broll_max_insertions,
+                        min_gap_seconds=broll_min_gap_seconds,
+                    )
 
                 # Save to DB immediately
                 clip_id = await self.clip_repo.create_clip(

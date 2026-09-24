@@ -514,6 +514,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             social_overlay,
             target_duration_seconds,
             max_clips,
+            include_broll,
+            broll_settings,
         )
 
         # Save source metadata for resume/retries in environments without sources.url column
@@ -1526,6 +1528,8 @@ async def resume_task(
             metadata.get("target_duration_seconds")
         )
         max_clips = _normalize_max_clips(metadata.get("max_clips"))
+        broll_settings = _normalize_broll_settings(metadata.get("broll_settings"))
+        include_broll = bool(task.get("include_broll", False))
 
         if not source_url or not source_type:
             raise HTTPException(status_code=400, detail="Task source URL is missing")
@@ -1573,6 +1577,8 @@ async def resume_task(
             social_overlay,
             target_duration_seconds,
             max_clips,
+            include_broll,
+            broll_settings,
         )
 
         return {"message": "Task resumed", "job_id": job_id}

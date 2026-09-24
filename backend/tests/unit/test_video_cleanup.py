@@ -13,6 +13,7 @@ from src.video_utils import (
     get_words_for_keep_ranges,
     crossfade_fades_for_ranges,
     crossfade_fade_for_ranges,
+    map_source_time_to_output_seconds,
 )
 
 
@@ -259,6 +260,24 @@ def test_get_words_for_keep_ranges_retimes_words_into_output_timeline():
     assert [word["confidence"] for word in words] == [1.0, 1.0, 1.0]
     assert [word["start"] for word in words] == pytest.approx([0.0, 0.3 - fade, 0.6 - fade])
     assert [word["end"] for word in words] == pytest.approx([0.3, 0.6 - fade, 0.9 - fade])
+
+
+def test_map_source_time_to_output_seconds_tracks_crossfade_shortening():
+    keep_ranges = [(0.0, 0.3), (1.0, 1.6)]
+    (fade,) = crossfade_fades_for_ranges(keep_ranges)
+
+    # A timestamp inside the first kept range maps 1:1.
+    assert map_source_time_to_output_seconds(keep_ranges, 0.1) == pytest.approx(0.1)
+    # A timestamp inside the second kept range is pulled earlier by the
+    # crossfade at the one junction between the two ranges, same as caption
+    # word timing (get_words_for_keep_ranges) for the same keep_ranges.
+    assert map_source_time_to_output_seconds(keep_ranges, 1.2) == pytest.approx(0.5 - fade)
+
+
+def test_map_source_time_to_output_seconds_returns_none_for_cut_out_time():
+    keep_ranges = [(0.0, 0.3), (1.0, 1.6)]
+    # 0.5s falls in the gap between the two kept ranges (a removed pause).
+    assert map_source_time_to_output_seconds(keep_ranges, 0.5) is None
 
 
 def test_build_keep_ranges_from_source_ranges_recomputes_each_range(monkeypatch):

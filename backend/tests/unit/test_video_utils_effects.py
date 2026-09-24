@@ -292,3 +292,85 @@ def test_build_clip_signal_summary_surfaces_hook_and_audio_peak(monkeypatch, tmp
     assert "Wait what happened?" in summary
     assert "audio energy peak" in summary
     assert "question/hook" in summary
+
+
+def test_apply_broll_to_clip_writes_output_when_all_insertions_succeed(tmp_path):
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"clip")
+    broll_a = tmp_path / "broll_a.mp4"
+    broll_a.write_bytes(b"a")
+    broll_b = tmp_path / "broll_b.mp4"
+    broll_b.write_bytes(b"b")
+    output_path = tmp_path / "final.mp4"
+
+    def fake_insert(main_clip_path, _broll_path, _insert_time, _duration, out_path, **_kw):
+        Path(out_path).write_bytes(Path(main_clip_path).read_bytes() + b"+broll")
+        return True
+
+    with patch("src.video_utils.insert_broll_into_clip", side_effect=fake_insert):
+        success = video_utils.apply_broll_to_clip(
+            clip_path,
+            [
+                {"local_path": str(broll_a), "timestamp": 5.0, "duration": 3.0},
+                {"local_path": str(broll_b), "timestamp": 1.0, "duration": 2.0},
+            ],
+            output_path,
+        )
+
+    assert success is True
+    assert output_path.exists()
+
+
+def test_apply_broll_to_clip_keeps_partial_success_when_one_insertion_fails(tmp_path):
+    """One suggestion failing shouldn't discard insertions that already
+    succeeded — the output should reflect whatever the chain managed."""
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"clip")
+    broll_a = tmp_path / "broll_a.mp4"
+    broll_a.write_bytes(b"a")
+    broll_b = tmp_path / "broll_b.mp4"
+    broll_b.write_bytes(b"b")
+    output_path = tmp_path / "final.mp4"
+
+    def fake_insert(main_clip_path, broll_path, _insert_time, _duration, out_path, **_kw):
+        # Fail only for the insertion sourced from broll_b (the earliest
+        # timestamp, processed last).
+        if Path(broll_path) == broll_b:
+            return False
+        Path(out_path).write_bytes(Path(main_clip_path).read_bytes() + b"+broll")
+        return True
+
+    with patch("src.video_utils.insert_broll_into_clip", side_effect=fake_insert):
+        success = video_utils.apply_broll_to_clip(
+            clip_path,
+            [
+                {"local_path": str(broll_a), "timestamp": 5.0, "duration": 3.0},
+                {"local_path": str(broll_b), "timestamp": 1.0, "duration": 2.0},
+            ],
+            output_path,
+        )
+
+    assert success is True
+    assert output_path.read_bytes() == b"clip+broll"
+
+
+def test_apply_broll_to_clip_fails_without_writing_output_when_all_insertions_fail(tmp_path):
+    """Regression test: the old implementation always wrote the last
+    (chronologically earliest) suggestion straight to output_path and
+    unconditionally returned True, so a failed insertion left callers
+    believing a composited clip existed when output_path was never created."""
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"clip")
+    broll_path = tmp_path / "broll.mp4"
+    broll_path.write_bytes(b"b")
+    output_path = tmp_path / "final.mp4"
+
+    with patch("src.video_utils.insert_broll_into_clip", return_value=False):
+        success = video_utils.apply_broll_to_clip(
+            clip_path,
+            [{"local_path": str(broll_path), "timestamp": 1.0, "duration": 2.0}],
+            output_path,
+        )
+
+    assert success is False
+    assert not output_path.exists()

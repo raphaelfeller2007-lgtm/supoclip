@@ -4782,6 +4782,31 @@ def get_words_for_keep_ranges(
     return relevant_words
 
 
+def map_source_time_to_output_seconds(
+    keep_ranges: List[Tuple[float, float]], source_time: float
+) -> Optional[float]:
+    """Project one absolute source-video timestamp into the post-cut output timeline.
+
+    Mirrors get_words_for_keep_ranges's crossfade-aware offset math but for a
+    single point in time (used to place B-roll insertions at the right spot in
+    a clip whose pauses/fillers were cut). Returns None when the timestamp
+    falls inside a range that was cut out, since there's nothing to anchor to.
+    """
+    if not keep_ranges:
+        return None
+
+    fades = crossfade_fades_for_ranges(keep_ranges)
+    timeline_offset = 0.0
+    for index, (keep_start, keep_end) in enumerate(keep_ranges):
+        if index > 0 and fades:
+            timeline_offset -= fades[index - 1]
+        if keep_start <= source_time <= keep_end:
+            return timeline_offset + (source_time - keep_start)
+        timeline_offset += keep_end - keep_start
+
+    return None
+
+
 def create_optimized_clip(
     video_path: Path,
     start_time: float,
@@ -5531,7 +5556,8 @@ def apply_broll_to_clip(
         )
 
         current_clip_path = clip_path
-        temp_paths = []
+        temp_paths: List[Path] = []
+        applied_any = False
 
         for i, suggestion in enumerate(sorted_suggestions):
             broll_path = suggestion.get("local_path")
@@ -5541,32 +5567,37 @@ def apply_broll_to_clip(
 
             timestamp = suggestion.get("timestamp", 0)
             duration = suggestion.get("duration", 3.0)
-
-            # Create temp output for intermediate clips
-            if i < len(sorted_suggestions) - 1:
-                temp_output = output_path.parent / f"temp_broll_{i}.mp4"
-                temp_paths.append(temp_output)
-            else:
-                temp_output = output_path
+            temp_output = output_path.parent / f"temp_broll_{i}_{uuid.uuid4().hex[:8]}.mp4"
 
             success = insert_broll_into_clip(
                 current_clip_path, Path(broll_path), timestamp, duration, temp_output
             )
 
             if success:
+                if current_clip_path != clip_path:
+                    temp_paths.append(current_clip_path)
                 current_clip_path = temp_output
+                applied_any = True
             else:
                 logger.warning(f"Failed to insert B-roll at {timestamp}s")
+                if temp_output.exists():
+                    temp_output.unlink()
 
-        # Cleanup temp files
+        # applied_any tracks whether the chain actually produced a composited
+        # file — the naive "always write the last suggestion to output_path"
+        # approach silently dropped output_path when that last suggestion
+        # (chronologically earliest) happened to fail while earlier ones succeeded.
+        if applied_any:
+            shutil.move(str(current_clip_path), str(output_path))
+
         for temp_path in temp_paths:
-            if temp_path.exists() and temp_path != output_path:
+            if temp_path.exists():
                 try:
                     temp_path.unlink()
                 except Exception:
                     pass
 
-        return True
+        return applied_any
 
     except Exception as e:
         logger.error(f"Error applying B-roll to clip: {e}")
