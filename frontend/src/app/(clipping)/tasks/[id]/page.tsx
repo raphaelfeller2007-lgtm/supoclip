@@ -86,6 +86,7 @@ import {
   Clapperboard,
   Sparkles,
   Copy,
+  Send,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { Progress } from "@/components/ui/progress";
@@ -1757,12 +1758,22 @@ export default function TaskPage() {
                 <Settings2 className="w-4 h-4" />
                 Project Settings
               </Button>
-              {selectedClipIds.length >= 2 && (
-                <Button variant="outline" size="sm" onClick={handleMergeClips}>
-                  <GitMerge className="w-4 h-4" />
-                  Merge Selected ({selectedClipIds.length})
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push(`/publish/select?taskId=${task.id}`)}
+                >
+                  <Send className="w-4 h-4" />
+                  Publish Clips
                 </Button>
-              )}
+                {selectedClipIds.length >= 2 && (
+                  <Button variant="outline" size="sm" onClick={handleMergeClips}>
+                    <GitMerge className="w-4 h-4" />
+                    Merge Selected ({selectedClipIds.length})
+                  </Button>
+                )}
+              </div>
             </div>
 
             <Sheet open={settingsSheetOpen} onOpenChange={setSettingsSheetOpen}>

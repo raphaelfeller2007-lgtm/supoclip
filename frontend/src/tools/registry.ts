@@ -1,6 +1,7 @@
 import type { Tool } from "./types";
 import { clippingTool } from "./clipping";
 import { rankingTool } from "./ranking";
+import { publishTool } from "./publish";
 import { testingTool } from "./testing";
 
 /**
@@ -28,5 +29,6 @@ import { testingTool } from "./testing";
 export const TOOLS: Tool[] = [
   clippingTool,
   rankingTool,
+  publishTool,
   ...(process.env.NEXT_PUBLIC_ENABLE_TESTING_TOOL === "true" ? [testingTool] : []),
 ];
