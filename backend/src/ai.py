@@ -888,7 +888,7 @@ def _parse_transcript_spans(transcript: str) -> list[dict[str, Any]]:
             {
                 "start": start_seconds,
                 "end": end_seconds,
-                "text": match.group("text").strip(),
+                "text": SPEAKER_PREFIX_PATTERN.sub("", match.group("text").strip()),
             }
         )
     return spans
@@ -1134,8 +1134,19 @@ async def get_most_relevant_parts_by_transcript(
                     segment.end_time,
                 )
                 if grounded_text is None:
+                    # The model's chosen bounds rarely land exactly on a
+                    # transcript line's own start/end (transcript lines are
+                    # short per-utterance chunks; the model reasonably rounds
+                    # to the nearest few seconds) even when the range is
+                    # fully backed by real transcript content. Fall back to
+                    # overlap-based extraction — the same one _repair_segment_bounds
+                    # already uses — before concluding the range is fabricated.
+                    grounded_text = _extract_transcript_text(
+                        transcript_spans, start_seconds, end_seconds
+                    )
+                if not grounded_text:
                     logger.warning(
-                        "Skipping segment with timestamps not aligned to transcript lines: %s-%s",
+                        "Skipping segment with no transcript content in range: %s-%s",
                         segment.start_time,
                         segment.end_time,
                     )
