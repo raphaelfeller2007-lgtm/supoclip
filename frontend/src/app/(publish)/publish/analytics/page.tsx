@@ -67,6 +67,8 @@ export default function PublishAnalyticsPage() {
 
   useEffect(() => {
     loadAnalytics();
+    const interval = setInterval(loadAnalytics, 60_000);
+    return () => clearInterval(interval);
   }, [loadAnalytics]);
 
   const toggleChannel = (channelId: string) => {
