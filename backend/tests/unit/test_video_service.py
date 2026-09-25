@@ -1,3 +1,4 @@
+import contextlib
 import json
 from types import SimpleNamespace
 
@@ -5,6 +6,15 @@ import pytest
 
 from src.services import video_service as video_service_module
 from src.services.video_service import VideoService
+
+
+@contextlib.asynccontextmanager
+async def _noop_resource_slot(_name, _max_concurrent=1):
+    yield
+
+
+async def _run_inline(func, *args, **kwargs):
+    return func(*args, **kwargs)
 
 
 class _EmptyAnalysis:
@@ -198,3 +208,46 @@ def test_fallback_segment_caps_to_video_duration():
     assert segment["start_time"] == "00:00"
     assert segment["end_time"] == "00:12"
     assert segment["hook_type"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_apply_broll_to_rendered_clip_reruns_size_cap_after_compositing(
+    monkeypatch, tmp_path
+):
+    """Regression test: create_optimized_clip already enforces the 300MB
+    cap before B-roll is composited in; nothing re-checked it afterward, so
+    a clip right at the cap could grow back past it silently."""
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"original clip bytes")
+    broll_source = tmp_path / "broll.mp4"
+    broll_source.write_bytes(b"broll")
+
+    def fake_apply_broll_to_clip(_clip_path, _selected, temp_output):
+        temp_output.write_bytes(b"composited clip bytes, larger now")
+        return True
+
+    size_cap_calls = []
+
+    def fake_enforce_size_cap(path):
+        size_cap_calls.append(path)
+        return False
+
+    monkeypatch.setattr(video_service_module, "resource_slot", _noop_resource_slot)
+    monkeypatch.setattr(video_service_module, "run_in_thread", _run_inline)
+    monkeypatch.setattr(
+        video_service_module, "apply_broll_to_clip", fake_apply_broll_to_clip
+    )
+    monkeypatch.setattr(video_service_module, "enforce_size_cap", fake_enforce_size_cap)
+
+    await VideoService.apply_broll_to_rendered_clip(
+        clip_path,
+        keep_ranges=[(0.0, 100.0)],
+        broll_suggestions=[
+            {"local_path": str(broll_source), "timestamp": 5.0, "duration": 2.0}
+        ],
+        max_insertions=3,
+        min_gap_seconds=6.0,
+    )
+
+    assert size_cap_calls == [clip_path]
+    assert clip_path.read_bytes() == b"composited clip bytes, larger now"

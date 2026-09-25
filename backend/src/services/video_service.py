@@ -31,6 +31,7 @@ from ..video_utils import (
     get_transcript_text_in_range,
     map_source_time_to_output_seconds,
     apply_broll_to_clip,
+    enforce_size_cap,
 )
 from ..clip_source_map import (
     normalize_source_ranges,
@@ -465,6 +466,10 @@ class VideoService:
                 )
             if success and temp_output.exists():
                 temp_output.replace(clip_path)
+                # create_optimized_clip already ran this before B-roll was
+                # composited in; re-run it since compositing extra footage
+                # can push an already-at-the-cap clip back over 300MB.
+                await run_in_thread(enforce_size_cap, clip_path)
                 logger.info(
                     f"Applied {len(selected)} B-roll insertion(s) to {clip_path.name}"
                 )
