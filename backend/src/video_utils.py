@@ -5493,12 +5493,14 @@ def insert_broll_into_clip(
     """
     Overlay B-roll footage onto a clip at a specified timestamp.
 
-    Composited as a translucent, square picture-in-picture near the bottom of
-    the frame (via ffmpeg `overlay`, time-gated with `enable=between(...)`)
-    rather than a full-frame cut — a full-frame swap was replacing the
-    caption/hook burn-in entirely for the B-roll's duration and looked jarring
-    at full opacity/size. The main video's own duration and burned-in layers
-    (captions, hooks) are left untouched; B-roll composites on top of them.
+    Composited as an opaque, square picture-in-picture centered on the frame,
+    sized to 65% of the shorter frame dimension (via ffmpeg `overlay`,
+    time-gated with `enable=between(...)`) rather than a full-frame cut — a
+    full-frame swap was replacing the caption/hook burn-in entirely for the
+    B-roll's duration and looked jarring. The main video's own duration and
+    burned-in layers (captions, hooks) are left untouched; B-roll composites
+    on top of them. Enters with a damped-oscillation bounce (grows past its
+    target size and settles) and exits with a quick fade-out.
 
     Args:
         main_clip_path: Path to the main video clip
@@ -5528,35 +5530,57 @@ def insert_broll_into_clip(
             return False
 
         broll_end_time = insert_time + actual_broll_duration
-        fade_duration = min(
-            max(0.0, transition_duration),
-            max(0.0, actual_broll_duration / 3),
-        )
 
-        # Picture-in-picture box: ~50% of the shorter frame dimension, square,
-        # bottom-anchored with a small margin off the edge.
-        box_size = int(min(target_width, target_height) * 0.5)
+        # Picture-in-picture box: ~65% of the shorter frame dimension, square,
+        # centered on the frame.
+        box_size = int(min(target_width, target_height) * 0.65)
         box_size -= box_size % 2  # even dims required by the encoder
-        bottom_margin = int(target_height * 0.04)
+
+        # Bounce-in: the box grows from 0 past its target size and settles
+        # (damped oscillation), evaluated per-frame via `scale ... eval=frame`.
+        # A quick fade-out (not a symmetric fade-in/out) handles the exit.
+        bounce_duration = min(0.4, actual_broll_duration / 3)
+        fade_out_duration = min(
+            max(0.0, transition_duration), 0.2, max(0.0, actual_broll_duration - bounce_duration)
+        )
+        # `t` inside this chain must line up with the *output* timeline, not
+        # restart at 0 when the trimmed input starts decoding (which happens
+        # concurrently with the main clip, not at insert_time) — otherwise the
+        # bounce plays out before insert_time is ever reached and the box is
+        # already settled on its first visible frame (verified directly by
+        # rendering and inspecting frames). Shifting pts by insert_time makes
+        # `t` global-aligned, so "t - insert_time" is 0 on the first frame the
+        # overlay actually shows.
+        local_t = f"(t-{insert_time:.3f})"
+        # Floor at 2px, not 0 — `scale` can't allocate a literal 0x0 frame, and
+        # a 0-sized request silently falls back to the pre-scale (full) size
+        # instead of shrinking, which made the very first frame jump straight
+        # to full size instead of growing in (verified directly).
+        bounce_size_expr = (
+            f"if(lt({local_t},{bounce_duration:.3f}),"
+            f"{box_size}*max(2/{box_size},1-exp(-6*{local_t})*cos(12*{local_t})),{box_size})"
+        )
+        even_size_expr = f"trunc(({bounce_size_expr})/2)*2"
 
         broll_filter = (
-            f"[1:v]trim=start=0:end={actual_broll_duration:.3f},setpts=PTS-STARTPTS,"
+            f"[1:v]trim=start=0:end={actual_broll_duration:.3f},"
+            f"setpts=PTS-STARTPTS+{insert_time:.3f}/TB,"
             f"{resize_for_916_filter(box_size, box_size)},"
-            "format=yuva420p,colorchannelmixer=aa=0.5"
+            "format=yuva420p,"
+            f"scale=w='{even_size_expr}':h='{even_size_expr}':eval=frame"
         )
-        if fade_duration > 0:
+        if fade_out_duration > 0:
             broll_filter += (
-                f",fade=t=in:st=0:d={fade_duration:.3f}:alpha=1,"
-                f"fade=t=out:st={max(0.0, actual_broll_duration - fade_duration):.3f}:"
-                f"d={fade_duration:.3f}:alpha=1"
+                f",fade=t=out:st={max(0.0, broll_end_time - fade_out_duration):.3f}:"
+                f"d={fade_out_duration:.3f}:alpha=1"
             )
         broll_filter += "[vbroll]"
 
-        overlay_x = f"(main_w-{box_size})/2"
-        overlay_y = f"main_h-{box_size}-{bottom_margin}"
+        overlay_x = "(main_w-overlay_w)/2"
+        overlay_y = "(main_h-overlay_h)/2"
         filter_complex = (
             f"{broll_filter};"
-            f"[0:v][vbroll]overlay=x={overlay_x}:y={overlay_y}:"
+            f"[0:v][vbroll]overlay=x={overlay_x}:y={overlay_y}:eval=frame:"
             f"enable='between(t,{insert_time:.3f},{broll_end_time:.3f})'[v]"
         )
 
