@@ -784,9 +784,11 @@ Follow this workflow:
 2. Select only contiguous ranges that already exist in the transcript.
 3. Prefer moments with a strong hook, clear payoff, emotional charge, or concrete value.
 4. For each chosen segment, use the earliest timestamp in the selected range as start_time and the latest timestamp in the selected range as end_time.{broll_instruction}
+5. Before writing your final JSON, count your selected segments. If that count is below {max_segments}, re-scan the parts of the transcript you gave the least attention to (this is usually the middle and final thirds on a first pass) for moments you may have skipped too quickly, before finalizing.
 
 Selection target:
-- Choose up to {max_segments} segments total. Lean toward returning close to {max_segments} whenever the transcript has that many distinct, watchable moments — a solid-but-not-spectacular segment is still worth including, since the creator can always discard clips they don't want, but a segment the AI never surfaced can't be recovered. Only return fewer than {max_segments} when the transcript genuinely runs out of distinct moments that clear the bar below.
+- {max_segments} is your target, not a cautious ceiling to approach from a distance. Default to assuming a transcript this long can support close to {max_segments} distinct segments, since a first pass tends to under-mine long material rather than over-mine it. A solid-but-not-spectacular segment is still worth including — the creator can always discard a clip they don't want, but a segment the AI never surfaced can't be recovered.
+- Only settle for meaningfully fewer than {max_segments} after step 5's re-scan, and only when you can point to a specific, concrete reason for each gap (real filler, a near-duplicate of an already-selected point, a fragment that needs unseen context) — "nothing else stood out" on a single read-through is not by itself a reason to stop short.
 - Scan the entire transcript from the first timestamp to the last before finalizing your selection — do not stop once you have found a handful of strong moments early on. A long transcript's middle and final thirds are just as likely to contain good segments as its opening, and every section deserves the same scrutiny.
 - Do not pad with near-duplicate segments covering the same point, and do not include segments that fail the bar below — but do not hold back a clearly good, self-contained segment just because a "perfect" one already made the list.
 {duration_target_line}
