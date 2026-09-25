@@ -264,18 +264,21 @@ async def process_batch_queue_task(ctx: Dict[str, Any], batch_queue_id: str) -> 
 
 
 async def cleanup_orphaned_uploads_job(ctx: Dict[str, Any]) -> Dict[str, int]:
-    """Cron entrypoint: remove uploaded source videos that no `sources` row
-    references at all.
+    """Cron entrypoint: remove uploaded videos that nothing references at all.
 
-    `POST /upload` writes the file straight to disk before any DB row exists
-    — task creation (a separate step) is what creates the `sources` row a
-    task's whole lifetime then depends on (regeneration/hook-variant/
-    reactions re-renders all read back from the original upload, so normal
-    task processing/purging never touches this file — see
-    TaskService.purge_task). A user who uploads and then never submits the
-    create-task form (or hits an error first) leaves the file behind forever
-    with nothing else to ever clean it up. The grace period skips anything
-    recent so an in-progress upload-then-create-task flow is never at risk.
+    `POST /upload` writes the file straight to disk before any DB row exists.
+    Three different tables can go on to reference it by the same
+    `upload://<filename>` URL — `sources` (Clipping tasks; regeneration/
+    hook-variant/reactions re-renders all read back from the original
+    upload, so normal task processing/purging never touches this file — see
+    TaskService.purge_task), `ranking_folder_clips` (the Ranking folder
+    library, meant to persist indefinitely across projects), and
+    `ranking_inputs` (a Ranking project's attached clips) — all three must
+    be checked, or a file still live in one of them gets swept as orphaned.
+    A user who uploads and then never attaches the file anywhere (or hits an
+    error first) leaves it behind forever with nothing else to ever clean it
+    up. The grace period skips anything recent so an in-progress
+    upload-then-attach flow is never at risk.
     """
     import time
     from pathlib import Path
@@ -284,6 +287,8 @@ async def cleanup_orphaned_uploads_job(ctx: Dict[str, Any]) -> Dict[str, int]:
     from ..runtime_settings import load_runtime_settings_cache
     from ..config import get_config
     from ..repositories.source_repository import SourceRepository
+    from ..repositories.ranking_repository import RankingRepository
+    from ..repositories.ranking_folder_repository import RankingFolderRepository
     from ..services.video_service import UPLOAD_URL_PREFIX
 
     set_trace_id("cleanup-orphaned-uploads")
@@ -296,6 +301,8 @@ async def cleanup_orphaned_uploads_job(ctx: Dict[str, Any]) -> Dict[str, int]:
     async with AsyncSessionLocal() as db:
         await load_runtime_settings_cache(db)
         referenced_urls = await SourceRepository.get_upload_urls(db)
+        referenced_urls += await RankingFolderRepository.get_upload_file_paths(db)
+        referenced_urls += await RankingRepository.get_upload_file_paths(db)
 
     referenced_filenames = {
         Path(url.removeprefix(UPLOAD_URL_PREFIX)).name for url in referenced_urls

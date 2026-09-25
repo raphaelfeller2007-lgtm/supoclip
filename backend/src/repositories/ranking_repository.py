@@ -61,6 +61,18 @@ class RankingRepository:
         return input_id
 
     @staticmethod
+    async def get_upload_file_paths(db: AsyncSession) -> List[str]:
+        """Every `upload://...` `file_path` on record across every ranking
+        task — inputs attached straight from `POST /upload` (rather than a
+        folder-library clip) share the same upload directory as `sources`/
+        `ranking_folder_clips`, so disk cleanup must treat these as
+        referenced too."""
+        result = await db.execute(
+            text("SELECT file_path FROM ranking_inputs WHERE file_path LIKE 'upload://%'")
+        )
+        return [row.file_path for row in result.fetchall()]
+
+    @staticmethod
     async def list_inputs(db: AsyncSession, task_id: str) -> List[Dict[str, Any]]:
         """Ordered inputs for a ranking task — manual `rank_position` wins over
         the drag-order `order_index` when set, per the spec's "auto-number

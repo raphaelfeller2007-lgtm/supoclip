@@ -1,7 +1,8 @@
 """
 Tests for uploaded-source-video disk cleanup:
   - TaskService.purge_task now also deletes the uploaded source video (real DB, over the HTTP API)
-  - SourceRepository.get_upload_urls
+  - SourceRepository.get_upload_urls / RankingFolderRepository.get_upload_file_paths /
+    RankingRepository.get_upload_file_paths
   - workers.tasks.cleanup_orphaned_uploads_job (the daily cron sweep for never-attached uploads)
 """
 
@@ -13,6 +14,8 @@ import pytest
 
 from src.config import Config, get_config, set_config_override
 from src.database import AsyncSessionLocal
+from src.repositories.ranking_folder_repository import RankingFolderRepository
+from src.repositories.ranking_repository import RankingRepository
 from src.repositories.source_repository import SourceRepository
 from src.workers.tasks import cleanup_orphaned_uploads_job
 from tests.fixtures.factories import create_source, create_task, create_user
@@ -93,6 +96,114 @@ async def test_get_upload_urls_returns_only_upload_scheme(client, db_session):
     assert {url_a, url_b}.issubset(set(urls))
     assert all(url.startswith("upload://") for url in urls)
     assert youtube_source is not None  # sanity: the non-upload source was created too
+
+
+@pytest.mark.asyncio
+async def test_ranking_folder_get_upload_file_paths_returns_only_upload_scheme(
+    client, db_session
+):
+    suffix = uuid.uuid4().hex[:8]
+    file_path = f"upload://folder-clip-{suffix}.mp4"
+
+    await create_user(db_session, user_id="local")
+    folder_id = await RankingFolderRepository.get_or_create_folder(
+        db_session, user_id="local", name=f"Library {suffix}"
+    )
+    await RankingFolderRepository.upsert_clip(
+        db_session,
+        folder_id=folder_id,
+        file_path=file_path,
+        original_filename="clip.mp4",
+        duration_seconds=5.0,
+        content_hash=f"hash-{suffix}",
+    )
+
+    async with AsyncSessionLocal() as read_session:
+        paths = await RankingFolderRepository.get_upload_file_paths(read_session)
+
+    assert file_path in paths
+    assert all(path.startswith("upload://") for path in paths)
+
+
+@pytest.mark.asyncio
+async def test_ranking_inputs_get_upload_file_paths_returns_only_upload_scheme(
+    client, db_session
+):
+    suffix = uuid.uuid4().hex[:8]
+    file_path = f"upload://ranking-input-{suffix}.mp4"
+
+    await create_user(db_session, user_id="local")
+    task = await create_task(db_session, user_id="local", source_id=None, status="completed")
+    await RankingRepository.add_input(
+        db_session,
+        task_id=task["id"],
+        file_path=file_path,
+        original_filename="clip.mp4",
+        duration_seconds=5.0,
+        order_index=0,
+    )
+
+    async with AsyncSessionLocal() as read_session:
+        paths = await RankingRepository.get_upload_file_paths(read_session)
+
+    assert file_path in paths
+    assert all(path.startswith("upload://") for path in paths)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_orphaned_uploads_job_protects_ranking_referenced_files(
+    client, db_session, tmp_path
+):
+    """Regression test: the cron previously cross-referenced only `sources`,
+    so a file still live in a Ranking folder library or attached to a
+    Ranking project (same `uploads/` dir, same `upload://` scheme) was
+    silently deleted the moment it turned 24h old."""
+    config = Config()
+    config.temp_dir = str(tmp_path)
+    set_config_override(config)
+    try:
+        uploads_dir = tmp_path / "uploads"
+        uploads_dir.mkdir(parents=True)
+
+        suffix = uuid.uuid4().hex[:8]
+        folder_clip_file = uploads_dir / f"folder-clip-{suffix}.mp4"
+        folder_clip_file.write_bytes(b"folder clip")
+        ranking_input_file = uploads_dir / f"ranking-input-{suffix}.mp4"
+        ranking_input_file.write_bytes(b"ranking input")
+
+        day_old = time.time() - (25 * 60 * 60)
+        os.utime(folder_clip_file, (day_old, day_old))
+        os.utime(ranking_input_file, (day_old, day_old))
+
+        await create_user(db_session, user_id="local")
+        folder_id = await RankingFolderRepository.get_or_create_folder(
+            db_session, user_id="local", name=f"Library {suffix}"
+        )
+        await RankingFolderRepository.upsert_clip(
+            db_session,
+            folder_id=folder_id,
+            file_path=f"upload://{folder_clip_file.name}",
+            original_filename="clip.mp4",
+            duration_seconds=5.0,
+            content_hash=f"hash-{suffix}",
+        )
+        task = await create_task(db_session, user_id="local", source_id=None, status="completed")
+        await RankingRepository.add_input(
+            db_session,
+            task_id=task["id"],
+            file_path=f"upload://{ranking_input_file.name}",
+            original_filename="clip.mp4",
+            duration_seconds=5.0,
+            order_index=0,
+        )
+
+        result = await cleanup_orphaned_uploads_job({})
+
+        assert folder_clip_file.exists()  # still referenced by ranking_folder_clips
+        assert ranking_input_file.exists()  # still referenced by ranking_inputs
+        assert result["removed"] == 0
+    finally:
+        set_config_override(None)
 
 
 @pytest.mark.asyncio

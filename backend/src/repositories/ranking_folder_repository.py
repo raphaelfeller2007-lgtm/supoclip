@@ -144,6 +144,17 @@ class RankingFolderRepository:
         return clip_id
 
     @staticmethod
+    async def get_upload_file_paths(db: AsyncSession) -> List[str]:
+        """Every `upload://...` `file_path` on record across every folder —
+        clips added via the folder-library scan share the same upload
+        directory as `sources`/`ranking_inputs`, so disk cleanup must treat
+        these as referenced too."""
+        result = await db.execute(
+            text("SELECT file_path FROM ranking_folder_clips WHERE file_path LIKE 'upload://%'")
+        )
+        return [row.file_path for row in result.fetchall()]
+
+    @staticmethod
     async def list_clips(db: AsyncSession, folder_id: str) -> List[Dict[str, Any]]:
         result = await db.execute(
             text("""
