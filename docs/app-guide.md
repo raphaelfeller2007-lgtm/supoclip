@@ -66,7 +66,7 @@ Users can:
 - Resume errored or cancelled tasks
 - Delete tasks in bulk (soft-delete — moves them to Trash rather than deleting immediately)
 
-Deleting a task never deletes its source video. Deleted tasks land in **Trash** (`/trash`), where they can be restored or permanently deleted ("Delete forever", which is irreversible and best-effort removes the clip files on disk).
+Deleting a task never deletes its source video. Deleted tasks land in **Trash** (`/trash`), where they can be restored or permanently deleted ("Delete forever", which is irreversible and best-effort removes the clip files on disk — for a video you uploaded yourself, the original upload is deleted too at this point, not before).
 
 Status states used across the UI include:
 

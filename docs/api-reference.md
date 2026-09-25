@@ -98,7 +98,7 @@ Source file:
 - `POST /{task_id}/restore`
   - Restore a soft-deleted task out of Trash
 - `DELETE /{task_id}/purge`
-  - Permanently delete a soft-deleted task (irreversible) — best-effort removes its on-disk clip files, never touches the source video
+  - Permanently delete a soft-deleted task (irreversible; 400 if the task isn't already in Trash) — best-effort removes its on-disk clip files, and for an uploaded (`video_url`) source also deletes the original source video (a YouTube-sourced task's source is already removed right after processing, so purge has nothing left to touch there)
 
 ### Clip operations
 
