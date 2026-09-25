@@ -250,7 +250,7 @@ async def test_apply_broll_to_rendered_clip_reruns_size_cap_after_compositing(
 async def test_apply_broll_to_rendered_clip_does_not_acquire_gpu_slot(
     monkeypatch, tmp_path
 ):
-    """insert_broll_into_clip's ffmpeg command hardcodes libx264 and never
+    """apply_broll_to_clip's ffmpeg command hardcodes libx264 and never
     touches the GPU/VRAM the "gpu" resource_slot protects, so B-roll
     compositing must not serialize against real GPU renders/Ollama calls."""
     clip_path = tmp_path / "clip.mp4"

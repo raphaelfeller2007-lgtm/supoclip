@@ -460,7 +460,7 @@ class VideoService:
 
         temp_output = clip_path.with_name(f"{clip_path.stem}_broll_{uuid.uuid4().hex[:8]}.mp4")
         try:
-            # No "gpu" resource_slot here: insert_broll_into_clip's ffmpeg
+            # No "gpu" resource_slot here: apply_broll_to_clip's ffmpeg
             # command hardcodes libx264 and never touches the GPU/VRAM that
             # slot protects, so acquiring it would only add contention
             # against other tasks' real GPU renders/Ollama calls.

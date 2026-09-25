@@ -5482,117 +5482,168 @@ def create_9_16_clip(
 MAX_BROLL_DISPLAY_SECONDS = 2.0
 
 
-def insert_broll_into_clip(
-    main_clip_path: Path,
-    broll_path: Path,
+def _build_broll_overlay_stage(
+    input_index: int,
     insert_time: float,
-    broll_duration: float,
-    output_path: Path,
-    transition_duration: float = 0.3,
-) -> bool:
-    """
-    Overlay B-roll footage onto a clip at a specified timestamp.
+    actual_broll_duration: float,
+    box_size: int,
+    transition_duration: float,
+) -> Tuple[str, str, float]:
+    """Build the filter chain that turns input pad `[{input_index}:v]` into a
+    time-gated, bounce-in picture-in-picture ready to `overlay` onto a main
+    clip. Returns (filter_chain_str, output_label, broll_end_time).
 
     Composited as an opaque, square picture-in-picture centered on the frame,
-    sized to 65% of the shorter frame dimension (via ffmpeg `overlay`,
-    time-gated with `enable=between(...)`) rather than a full-frame cut — a
-    full-frame swap was replacing the caption/hook burn-in entirely for the
-    B-roll's duration and looked jarring. The main video's own duration and
-    burned-in layers (captions, hooks) are left untouched; B-roll composites
-    on top of them. Enters with a damped-oscillation bounce (grows past its
-    target size and settles) and exits with a quick fade-out.
+    sized to 65% of the shorter frame dimension, rather than a full-frame cut
+    — a full-frame swap was replacing the caption/hook burn-in entirely for
+    the B-roll's duration and looked jarring. Enters with a damped-oscillation
+    bounce (grows past its target size and settles) and exits with a quick
+    fade-out.
+    """
+    broll_end_time = insert_time + actual_broll_duration
+
+    # Bounce-in: the box grows from 0 past its target size and settles
+    # (damped oscillation), evaluated per-frame via `scale ... eval=frame`.
+    # A quick fade-out (not a symmetric fade-in/out) handles the exit.
+    bounce_duration = min(0.4, actual_broll_duration / 3)
+    fade_out_duration = min(
+        max(0.0, transition_duration), 0.2, max(0.0, actual_broll_duration - bounce_duration)
+    )
+    # `t` inside this chain must line up with the *output* timeline, not
+    # restart at 0 when the trimmed input starts decoding (which happens
+    # concurrently with the main clip, not at insert_time) — otherwise the
+    # bounce plays out before insert_time is ever reached and the box is
+    # already settled on its first visible frame (verified directly by
+    # rendering and inspecting frames). Shifting pts by insert_time makes
+    # `t` global-aligned, so "t - insert_time" is 0 on the first frame the
+    # overlay actually shows.
+    local_t = f"(t-{insert_time:.3f})"
+    # Floor at 2px, not 0 — `scale` can't allocate a literal 0x0 frame, and
+    # a 0-sized request silently falls back to the pre-scale (full) size
+    # instead of shrinking, which made the very first frame jump straight
+    # to full size instead of growing in (verified directly).
+    bounce_size_expr = (
+        f"if(lt({local_t},{bounce_duration:.3f}),"
+        f"{box_size}*max(2/{box_size},1-exp(-6*{local_t})*cos(12*{local_t})),{box_size})"
+    )
+    even_size_expr = f"trunc(({bounce_size_expr})/2)*2"
+
+    label = f"vbroll{input_index}"
+    filter_chain = (
+        f"[{input_index}:v]trim=start=0:end={actual_broll_duration:.3f},"
+        f"setpts=PTS-STARTPTS+{insert_time:.3f}/TB,"
+        f"{resize_for_916_filter(box_size, box_size)},"
+        "format=yuva420p,"
+        f"scale=w='{even_size_expr}':h='{even_size_expr}':eval=frame"
+    )
+    if fade_out_duration > 0:
+        filter_chain += (
+            f",fade=t=out:st={max(0.0, broll_end_time - fade_out_duration):.3f}:"
+            f"d={fade_out_duration:.3f}:alpha=1"
+        )
+    filter_chain += f"[{label}]"
+    return filter_chain, label, broll_end_time
+
+
+def apply_broll_to_clip(
+    clip_path: Path, broll_suggestions: List[Dict[str, Any]], output_path: Path
+) -> bool:
+    """
+    Composite every valid B-roll suggestion onto a clip in one ffmpeg pass.
+
+    Each suggestion becomes one extra `-i` input and one chained `overlay`
+    filter stage in a single combined `filter_complex` — not, as an earlier
+    version of this function did, one full sequential re-encode per
+    suggestion (the same N-re-encodes-instead-of-one-combined-pass anti­
+    pattern CLAUDE.md's Common Pitfalls calls out for ranking's transition
+    SFX). A suggestion whose file is missing or fails to probe is skipped
+    individually (so the rest still compose); only a failure of the combined
+    ffmpeg command itself drops every insertion at once.
 
     Args:
-        main_clip_path: Path to the main video clip
-        broll_path: Path to the B-roll video
-        insert_time: When to show B-roll (seconds from clip start)
-        broll_duration: How long to show B-roll (seconds)
-        output_path: Where to save the composited clip
-        transition_duration: Fade-in/out duration (seconds)
+        clip_path: Path to the main clip
+        broll_suggestions: List of B-roll suggestions with local_path, timestamp, duration
+        output_path: Where to save the final clip
 
     Returns:
         True if successful
     """
+    if not broll_suggestions:
+        logger.info("No B-roll suggestions to apply")
+        return False
+
     try:
-        main_duration = ffprobe_duration(main_clip_path)
-        source_broll_duration = ffprobe_duration(broll_path)
-        target_width, target_height = ffprobe_video_size(main_clip_path)
-
-        insert_time = max(0.0, min(insert_time, max(0.0, main_duration - 0.5)))
-        actual_broll_duration = min(
-            max(0.0, broll_duration),
-            MAX_BROLL_DISPLAY_SECONDS,
-            source_broll_duration,
-            max(0.0, main_duration - insert_time),
-        )
-        if actual_broll_duration <= 0.05:
-            logger.warning("B-roll duration is too short, skipping insertion")
-            return False
-
-        broll_end_time = insert_time + actual_broll_duration
+        main_duration = ffprobe_duration(clip_path)
+        target_width, target_height = ffprobe_video_size(clip_path)
 
         # Picture-in-picture box: ~65% of the shorter frame dimension, square,
-        # centered on the frame.
+        # shared by every insertion since they all composite onto the same
+        # main clip.
         box_size = int(min(target_width, target_height) * 0.65)
         box_size -= box_size % 2  # even dims required by the encoder
 
-        # Bounce-in: the box grows from 0 past its target size and settles
-        # (damped oscillation), evaluated per-frame via `scale ... eval=frame`.
-        # A quick fade-out (not a symmetric fade-in/out) handles the exit.
-        bounce_duration = min(0.4, actual_broll_duration / 3)
-        fade_out_duration = min(
-            max(0.0, transition_duration), 0.2, max(0.0, actual_broll_duration - bounce_duration)
-        )
-        # `t` inside this chain must line up with the *output* timeline, not
-        # restart at 0 when the trimmed input starts decoding (which happens
-        # concurrently with the main clip, not at insert_time) — otherwise the
-        # bounce plays out before insert_time is ever reached and the box is
-        # already settled on its first visible frame (verified directly by
-        # rendering and inspecting frames). Shifting pts by insert_time makes
-        # `t` global-aligned, so "t - insert_time" is 0 on the first frame the
-        # overlay actually shows.
-        local_t = f"(t-{insert_time:.3f})"
-        # Floor at 2px, not 0 — `scale` can't allocate a literal 0x0 frame, and
-        # a 0-sized request silently falls back to the pre-scale (full) size
-        # instead of shrinking, which made the very first frame jump straight
-        # to full size instead of growing in (verified directly).
-        bounce_size_expr = (
-            f"if(lt({local_t},{bounce_duration:.3f}),"
-            f"{box_size}*max(2/{box_size},1-exp(-6*{local_t})*cos(12*{local_t})),{box_size})"
-        )
-        even_size_expr = f"trunc(({bounce_size_expr})/2)*2"
+        broll_paths: List[Path] = []
+        filter_stages: List[str] = []
+        overlays: List[Tuple[str, float, float]] = []  # (label, insert_time, broll_end_time)
 
-        broll_filter = (
-            f"[1:v]trim=start=0:end={actual_broll_duration:.3f},"
-            f"setpts=PTS-STARTPTS+{insert_time:.3f}/TB,"
-            f"{resize_for_916_filter(box_size, box_size)},"
-            "format=yuva420p,"
-            f"scale=w='{even_size_expr}':h='{even_size_expr}':eval=frame"
-        )
-        if fade_out_duration > 0:
-            broll_filter += (
-                f",fade=t=out:st={max(0.0, broll_end_time - fade_out_duration):.3f}:"
-                f"d={fade_out_duration:.3f}:alpha=1"
+        for suggestion in sorted(broll_suggestions, key=lambda item: item.get("timestamp", 0)):
+            broll_path_str = suggestion.get("local_path")
+            if not broll_path_str or not Path(broll_path_str).exists():
+                logger.warning(f"B-roll file not found: {broll_path_str}")
+                continue
+            broll_path = Path(broll_path_str)
+
+            try:
+                source_broll_duration = ffprobe_duration(broll_path)
+            except Exception as e:
+                logger.warning(f"Skipping unreadable B-roll {broll_path}: {e}")
+                continue
+
+            timestamp = suggestion.get("timestamp", 0)
+            duration = suggestion.get("duration", 3.0)
+            insert_time = max(0.0, min(timestamp, max(0.0, main_duration - 0.5)))
+            actual_broll_duration = min(
+                max(0.0, duration),
+                MAX_BROLL_DISPLAY_SECONDS,
+                source_broll_duration,
+                max(0.0, main_duration - insert_time),
             )
-        broll_filter += "[vbroll]"
+            if actual_broll_duration <= 0.05:
+                logger.warning(f"B-roll duration too short at {timestamp}s, skipping insertion")
+                continue
 
+            input_index = len(broll_paths) + 1
+            filter_chain, label, broll_end_time = _build_broll_overlay_stage(
+                input_index, insert_time, actual_broll_duration, box_size, transition_duration=0.3
+            )
+            broll_paths.append(broll_path)
+            filter_stages.append(filter_chain)
+            overlays.append((label, insert_time, broll_end_time))
+
+        if not overlays:
+            logger.warning("No valid B-roll insertions to apply")
+            return False
+
+        # Chain the overlay stages: the first broll composites onto the main
+        # clip, then each subsequent one composites onto the previous
+        # stage's output.
         overlay_x = "(main_w-overlay_w)/2"
         overlay_y = "(main_h-overlay_h)/2"
-        filter_complex = (
-            f"{broll_filter};"
-            f"[0:v][vbroll]overlay=x={overlay_x}:y={overlay_y}:eval=frame:"
-            f"enable='between(t,{insert_time:.3f},{broll_end_time:.3f})'[v]"
-        )
+        current_label = "0:v"
+        for index, (broll_label, insert_time, broll_end_time) in enumerate(overlays):
+            out_label = "v" if index == len(overlays) - 1 else f"ov{index}"
+            filter_stages.append(
+                f"[{current_label}][{broll_label}]overlay=x={overlay_x}:y={overlay_y}:eval=frame:"
+                f"enable='between(t,{insert_time:.3f},{broll_end_time:.3f})'[{out_label}]"
+            )
+            current_label = out_label
 
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(main_clip_path),
-            "-i",
-            str(broll_path),
+        command = ["ffmpeg", "-y", "-i", str(clip_path)]
+        for broll_path in broll_paths:
+            command += ["-i", str(broll_path)]
+        command += [
             "-filter_complex",
-            filter_complex,
+            ";".join(filter_stages),
             "-map",
             "[v]",
             "-map",
@@ -5614,85 +5665,11 @@ def insert_broll_into_clip(
             str(output_path),
         ]
         if run_ffmpeg_command(command).returncode != 0:
+            logger.error(f"Failed to composite {len(broll_paths)} B-roll insertion(s)")
             return False
 
-        logger.info(
-            f"Overlaid B-roll at {insert_time:.1f}s ({actual_broll_duration:.1f}s duration): {output_path}"
-        )
+        logger.info(f"Applied {len(broll_paths)} B-roll insertion(s) to {output_path}")
         return True
-
-    except Exception as e:
-        logger.error(f"Error inserting B-roll: {e}")
-        return False
-
-
-def apply_broll_to_clip(
-    clip_path: Path, broll_suggestions: List[Dict[str, Any]], output_path: Path
-) -> bool:
-    """
-    Apply multiple B-roll insertions to a clip.
-
-    Args:
-        clip_path: Path to the main clip
-        broll_suggestions: List of B-roll suggestions with local_path, timestamp, duration
-        output_path: Where to save the final clip
-
-    Returns:
-        True if successful
-    """
-    if not broll_suggestions:
-        logger.info("No B-roll suggestions to apply")
-        return False
-
-    try:
-        # Sort suggestions by timestamp (process from end to start to preserve timing)
-        sorted_suggestions = sorted(
-            broll_suggestions, key=lambda x: x.get("timestamp", 0), reverse=True
-        )
-
-        current_clip_path = clip_path
-        temp_paths: List[Path] = []
-        applied_any = False
-
-        for i, suggestion in enumerate(sorted_suggestions):
-            broll_path = suggestion.get("local_path")
-            if not broll_path or not Path(broll_path).exists():
-                logger.warning(f"B-roll file not found: {broll_path}")
-                continue
-
-            timestamp = suggestion.get("timestamp", 0)
-            duration = suggestion.get("duration", 3.0)
-            temp_output = output_path.parent / f"temp_broll_{i}_{uuid.uuid4().hex[:8]}.mp4"
-
-            success = insert_broll_into_clip(
-                current_clip_path, Path(broll_path), timestamp, duration, temp_output
-            )
-
-            if success:
-                if current_clip_path != clip_path:
-                    temp_paths.append(current_clip_path)
-                current_clip_path = temp_output
-                applied_any = True
-            else:
-                logger.warning(f"Failed to insert B-roll at {timestamp}s")
-                if temp_output.exists():
-                    temp_output.unlink()
-
-        # applied_any tracks whether the chain actually produced a composited
-        # file — the naive "always write the last suggestion to output_path"
-        # approach silently dropped output_path when that last suggestion
-        # (chronologically earliest) happened to fail while earlier ones succeeded.
-        if applied_any:
-            shutil.move(str(current_clip_path), str(output_path))
-
-        for temp_path in temp_paths:
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except Exception:
-                    pass
-
-        return applied_any
 
     except Exception as e:
         logger.error(f"Error applying B-roll to clip: {e}")

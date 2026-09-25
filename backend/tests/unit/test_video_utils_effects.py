@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -294,7 +295,20 @@ def test_build_clip_signal_summary_surfaces_hook_and_audio_peak(monkeypatch, tmp
     assert "question/hook" in summary
 
 
-def test_apply_broll_to_clip_writes_output_when_all_insertions_succeed(tmp_path):
+def _patch_broll_probing(monkeypatch, *, main_duration=30.0, broll_duration=5.0):
+    """apply_broll_to_clip probes the main clip and every broll file via
+    ffprobe before building its combined filter graph — stub those out so
+    tests exercise the compositing logic without real media files."""
+    monkeypatch.setattr(video_utils, "ffprobe_duration", lambda _path: (
+        main_duration if str(_path).endswith("clip.mp4") else broll_duration
+    ))
+    monkeypatch.setattr(video_utils, "ffprobe_video_size", lambda _path: (1080, 1920))
+
+
+def test_apply_broll_to_clip_writes_output_in_one_combined_ffmpeg_call(monkeypatch, tmp_path):
+    """Every valid suggestion becomes one extra ffmpeg -i input and one
+    chained overlay stage in a single run_ffmpeg_command call — not N
+    sequential full re-encodes."""
     clip_path = tmp_path / "clip.mp4"
     clip_path.write_bytes(b"clip")
     broll_a = tmp_path / "broll_a.mp4"
@@ -303,74 +317,122 @@ def test_apply_broll_to_clip_writes_output_when_all_insertions_succeed(tmp_path)
     broll_b.write_bytes(b"b")
     output_path = tmp_path / "final.mp4"
 
-    def fake_insert(main_clip_path, _broll_path, _insert_time, _duration, out_path, **_kw):
-        Path(out_path).write_bytes(Path(main_clip_path).read_bytes() + b"+broll")
-        return True
+    _patch_broll_probing(monkeypatch)
+    ffmpeg_calls = []
 
-    with patch("src.video_utils.insert_broll_into_clip", side_effect=fake_insert):
-        success = video_utils.apply_broll_to_clip(
-            clip_path,
-            [
-                {"local_path": str(broll_a), "timestamp": 5.0, "duration": 3.0},
-                {"local_path": str(broll_b), "timestamp": 1.0, "duration": 2.0},
-            ],
-            output_path,
-        )
+    def fake_run_ffmpeg_command(command, **_kw):
+        ffmpeg_calls.append(command)
+        Path(output_path).write_bytes(b"composited")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(video_utils, "run_ffmpeg_command", fake_run_ffmpeg_command)
+
+    success = video_utils.apply_broll_to_clip(
+        clip_path,
+        [
+            {"local_path": str(broll_a), "timestamp": 5.0, "duration": 3.0},
+            {"local_path": str(broll_b), "timestamp": 1.0, "duration": 2.0},
+        ],
+        output_path,
+    )
 
     assert success is True
-    assert output_path.exists()
+    assert output_path.read_bytes() == b"composited"
+    assert len(ffmpeg_calls) == 1  # one combined pass, not one per suggestion
+    command = ffmpeg_calls[0]
+    assert command.count("-i") == 3  # main clip + 2 broll inputs
+    assert str(broll_a) in command
+    assert str(broll_b) in command
 
 
-def test_apply_broll_to_clip_keeps_partial_success_when_one_insertion_fails(tmp_path):
-    """One suggestion failing shouldn't discard insertions that already
-    succeeded — the output should reflect whatever the chain managed."""
+def test_apply_broll_to_clip_skips_missing_or_unreadable_files_but_keeps_the_rest(
+    monkeypatch, tmp_path
+):
+    """A missing or unprobeable broll file is dropped individually so the
+    rest of the batch still composites — only a failure of the combined
+    ffmpeg command itself should drop everything."""
     clip_path = tmp_path / "clip.mp4"
     clip_path.write_bytes(b"clip")
     broll_a = tmp_path / "broll_a.mp4"
     broll_a.write_bytes(b"a")
     broll_b = tmp_path / "broll_b.mp4"
-    broll_b.write_bytes(b"b")
+    broll_b.write_bytes(b"b")  # unreadable: ffprobe_duration raises for this one
+    missing_broll = tmp_path / "missing.mp4"  # never written to disk
     output_path = tmp_path / "final.mp4"
 
-    def fake_insert(main_clip_path, broll_path, _insert_time, _duration, out_path, **_kw):
-        # Fail only for the insertion sourced from broll_b (the earliest
-        # timestamp, processed last).
-        if Path(broll_path) == broll_b:
-            return False
-        Path(out_path).write_bytes(Path(main_clip_path).read_bytes() + b"+broll")
-        return True
+    monkeypatch.setattr(video_utils, "ffprobe_video_size", lambda _path: (1080, 1920))
 
-    with patch("src.video_utils.insert_broll_into_clip", side_effect=fake_insert):
-        success = video_utils.apply_broll_to_clip(
-            clip_path,
-            [
-                {"local_path": str(broll_a), "timestamp": 5.0, "duration": 3.0},
-                {"local_path": str(broll_b), "timestamp": 1.0, "duration": 2.0},
-            ],
-            output_path,
-        )
+    def fake_ffprobe_duration(path):
+        if str(path).endswith("clip.mp4"):
+            return 30.0
+        if str(path) == str(broll_b):
+            raise RuntimeError("corrupt file")
+        return 5.0
+
+    monkeypatch.setattr(video_utils, "ffprobe_duration", fake_ffprobe_duration)
+
+    ffmpeg_calls = []
+
+    def fake_run_ffmpeg_command(command, **_kw):
+        ffmpeg_calls.append(command)
+        Path(output_path).write_bytes(b"composited")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(video_utils, "run_ffmpeg_command", fake_run_ffmpeg_command)
+
+    success = video_utils.apply_broll_to_clip(
+        clip_path,
+        [
+            {"local_path": str(broll_a), "timestamp": 5.0, "duration": 3.0},
+            {"local_path": str(broll_b), "timestamp": 1.0, "duration": 2.0},
+            {"local_path": str(missing_broll), "timestamp": 8.0, "duration": 2.0},
+        ],
+        output_path,
+    )
 
     assert success is True
-    assert output_path.read_bytes() == b"clip+broll"
+    assert len(ffmpeg_calls) == 1
+    command = ffmpeg_calls[0]
+    assert command.count("-i") == 2  # only the main clip + broll_a survived
+    assert str(broll_a) in command
+    assert str(broll_b) not in command
+    assert str(missing_broll) not in command
 
 
-def test_apply_broll_to_clip_fails_without_writing_output_when_all_insertions_fail(tmp_path):
-    """Regression test: the old implementation always wrote the last
-    (chronologically earliest) suggestion straight to output_path and
-    unconditionally returned True, so a failed insertion left callers
-    believing a composited clip existed when output_path was never created."""
+def test_apply_broll_to_clip_fails_without_writing_output_when_ffmpeg_fails(
+    monkeypatch, tmp_path
+):
     clip_path = tmp_path / "clip.mp4"
     clip_path.write_bytes(b"clip")
     broll_path = tmp_path / "broll.mp4"
     broll_path.write_bytes(b"b")
     output_path = tmp_path / "final.mp4"
 
-    with patch("src.video_utils.insert_broll_into_clip", return_value=False):
-        success = video_utils.apply_broll_to_clip(
-            clip_path,
-            [{"local_path": str(broll_path), "timestamp": 1.0, "duration": 2.0}],
-            output_path,
-        )
+    _patch_broll_probing(monkeypatch)
+    monkeypatch.setattr(
+        video_utils, "run_ffmpeg_command", lambda *_a, **_kw: SimpleNamespace(returncode=1)
+    )
+
+    success = video_utils.apply_broll_to_clip(
+        clip_path,
+        [{"local_path": str(broll_path), "timestamp": 1.0, "duration": 2.0}],
+        output_path,
+    )
+
+    assert success is False
+    assert not output_path.exists()
+
+
+def test_apply_broll_to_clip_returns_false_when_every_suggestion_is_invalid(tmp_path):
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"clip")
+    output_path = tmp_path / "final.mp4"
+
+    success = video_utils.apply_broll_to_clip(
+        clip_path,
+        [{"local_path": str(tmp_path / "missing.mp4"), "timestamp": 1.0, "duration": 2.0}],
+        output_path,
+    )
 
     assert success is False
     assert not output_path.exists()
