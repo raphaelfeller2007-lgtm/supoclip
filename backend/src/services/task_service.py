@@ -753,8 +753,15 @@ class TaskService:
         """Permanently delete a trashed task: best-effort removes each clip's
         on-disk file, deletes the clip rows, then hard-deletes the task row.
 
-        Source videos under `sources` are never touched by this flow.
+        YouTube-sourced tasks already had their source video removed right
+        after processing (see `_cleanup_source_video`). Uploaded videos are
+        deliberately kept alive for the task's whole lifetime instead — every
+        regeneration/hook-variant/reactions re-render reads back from the
+        original upload — so purge (the point the task itself stops existing)
+        is the first safe place to finally delete it.
         """
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+
         clips = await self.clip_repo.get_clips_by_task(self.db, task_id)
         for clip in clips:
             file_path = clip.get("file_path")
@@ -769,6 +776,19 @@ class TaskService:
 
         await self.clip_repo.delete_clips_by_task(self.db, task_id)
         await self.task_repo.purge_task(self.db, task_id)
+
+        if task and task.get("source_type") == "video_url":
+            source_url = task.get("source_url")
+            if source_url:
+                try:
+                    upload_path = self.video_service.resolve_local_video_path(source_url)
+                    if upload_path.exists():
+                        upload_path.unlink()
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to remove uploaded source video for task {task_id}: {e}"
+                    )
+
         logger.info(f"Purged task {task_id} and its clip files")
 
     async def update_task_settings(

@@ -92,3 +92,14 @@ class SourceRepository:
         )
         await db.commit()
         logger.info(f"Updated source {source_id} title to: {title}")
+
+    @staticmethod
+    async def get_upload_urls(db: AsyncSession) -> list[str]:
+        """Every `upload://...` source URL currently on record, across every
+        task state (active, trashed, even purged tasks whose source row
+        outlived them) — used to tell a still-referenced uploaded file apart
+        from an orphaned one during disk cleanup."""
+        result = await db.execute(
+            text("SELECT url FROM sources WHERE url LIKE 'upload://%'")
+        )
+        return [row.url for row in result.fetchall()]

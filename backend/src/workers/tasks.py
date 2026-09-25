@@ -263,6 +263,68 @@ async def process_batch_queue_task(ctx: Dict[str, Any], batch_queue_id: str) -> 
             raise
 
 
+async def cleanup_orphaned_uploads_job(ctx: Dict[str, Any]) -> Dict[str, int]:
+    """Cron entrypoint: remove uploaded source videos that no `sources` row
+    references at all.
+
+    `POST /upload` writes the file straight to disk before any DB row exists
+    — task creation (a separate step) is what creates the `sources` row a
+    task's whole lifetime then depends on (regeneration/hook-variant/
+    reactions re-renders all read back from the original upload, so normal
+    task processing/purging never touches this file — see
+    TaskService.purge_task). A user who uploads and then never submits the
+    create-task form (or hits an error first) leaves the file behind forever
+    with nothing else to ever clean it up. The grace period skips anything
+    recent so an in-progress upload-then-create-task flow is never at risk.
+    """
+    import time
+    from pathlib import Path
+
+    from ..database import AsyncSessionLocal
+    from ..runtime_settings import load_runtime_settings_cache
+    from ..config import get_config
+    from ..repositories.source_repository import SourceRepository
+    from ..services.video_service import UPLOAD_URL_PREFIX
+
+    set_trace_id("cleanup-orphaned-uploads")
+
+    grace_seconds = 24 * 60 * 60  # long enough that a slow/abandoned-then-resumed upload flow is never touched
+    removed = 0
+    freed_bytes = 0
+    checked = 0
+
+    async with AsyncSessionLocal() as db:
+        await load_runtime_settings_cache(db)
+        referenced_urls = await SourceRepository.get_upload_urls(db)
+
+    referenced_filenames = {
+        Path(url.removeprefix(UPLOAD_URL_PREFIX)).name for url in referenced_urls
+    }
+
+    uploads_dir = Path(get_config().temp_dir) / "uploads"
+    if not uploads_dir.exists():
+        return {"checked": 0, "removed": 0, "freed_bytes": 0}
+
+    now = time.time()
+    for file_path in uploads_dir.iterdir():
+        if not file_path.is_file() or file_path.name in referenced_filenames:
+            continue
+        checked += 1
+        try:
+            stat = file_path.stat()
+            if now - stat.st_mtime < grace_seconds:
+                continue
+            file_path.unlink()
+            removed += 1
+            freed_bytes += stat.st_size
+        except OSError as exc:
+            logger.warning("Failed to remove orphaned upload %s: %s", file_path, exc)
+
+    result = {"checked": checked, "removed": removed, "freed_bytes": freed_bytes}
+    logger.info("Orphaned upload cleanup complete: %s", result)
+    return result
+
+
 def _channel_poll_cron_hours(interval_hours: int) -> set:
     """arq's cron() is calendar-field-based, not a fixed-interval timer —
     this only yields evenly-spaced runs when interval_hours divides 24.
@@ -310,7 +372,6 @@ class WorkerSettings:
     # Worker pool settings
     max_jobs = 4  # Process up to 4 jobs simultaneously
 
-    # First cron job in this codebase — periodic channel sync (Channels tab).
     # sync_channel_job (one-off) doesn't need a cron_jobs entry of its own;
     # arq merges cron_jobs into its function table automatically.
     cron_jobs = [
@@ -318,5 +379,9 @@ class WorkerSettings:
             poll_channel_updates_job,
             hour=_channel_poll_cron_hours(config.channel_sync_poll_interval_hours),
             minute=0,
-        )
+        ),
+        # Fixed daily off-peak slot rather than a runtime setting — disk
+        # hygiene doesn't need admin tuning the way the channel poll interval
+        # does, and the grace period already makes the cadence non-critical.
+        cron(cleanup_orphaned_uploads_job, hour=3, minute=30),
     ]
