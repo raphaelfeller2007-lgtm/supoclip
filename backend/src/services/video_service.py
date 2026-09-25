@@ -39,6 +39,7 @@ from ..clip_source_map import (
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import get_config
 from ..testing.cache import cache_test_artifact
+from ..workers.resource_locks import resource_slot
 
 logger = logging.getLogger(__name__)
 UPLOAD_URL_PREFIX = "upload://"
@@ -270,21 +271,22 @@ class VideoService:
         clips_output_dir = Path(get_config().temp_dir) / "clips"
         clips_output_dir.mkdir(parents=True, exist_ok=True)
 
-        clips_info = await run_in_thread(
-            create_clips_with_transitions,
-            video_path,
-            segments,
-            clips_output_dir,
-            font_family,
-            font_size,
-            font_color,
-            caption_template,
-            output_format,
-            add_subtitles,
-            cleanup_settings,
-            hook_style,
-            social_overlay,
-        )
+        async with resource_slot("gpu", 1):
+            clips_info = await run_in_thread(
+                create_clips_with_transitions,
+                video_path,
+                segments,
+                clips_output_dir,
+                font_family,
+                font_size,
+                font_color,
+                caption_template,
+                output_format,
+                add_subtitles,
+                cleanup_settings,
+                hook_style,
+                social_overlay,
+            )
 
         logger.info(f"Successfully created {len(clips_info)} clips")
         return clips_info
@@ -353,24 +355,25 @@ class VideoService:
             keep_ranges = extend_keep_ranges_to_sentence_boundary(video_path, keep_ranges)
             keep_ranges = trim_keep_ranges_to_duration(keep_ranges, target_duration_seconds)
 
-            success = await run_in_thread(
-                create_optimized_clip,
-                video_path,
-                start_seconds,
-                end_seconds,
-                clip_path,
-                add_subtitles,
-                font_family,
-                font_size,
-                font_color,
-                caption_template,
-                output_format,
-                keep_ranges,
-                segment.get("hook_title"),
-                hook_style,
-                social_overlay,
-                segment.get("reactions"),
-            )
+            async with resource_slot("gpu", 1):
+                success = await run_in_thread(
+                    create_optimized_clip,
+                    video_path,
+                    start_seconds,
+                    end_seconds,
+                    clip_path,
+                    add_subtitles,
+                    font_family,
+                    font_size,
+                    font_color,
+                    caption_template,
+                    output_format,
+                    keep_ranges,
+                    segment.get("hook_title"),
+                    hook_style,
+                    social_overlay,
+                    segment.get("reactions"),
+                )
 
             if not success:
                 logger.error(f"Failed to create clip {clip_index + 1}")
@@ -456,9 +459,10 @@ class VideoService:
 
         temp_output = clip_path.with_name(f"{clip_path.stem}_broll_{uuid.uuid4().hex[:8]}.mp4")
         try:
-            success = await run_in_thread(
-                apply_broll_to_clip, clip_path, selected, temp_output
-            )
+            async with resource_slot("gpu", 1):
+                success = await run_in_thread(
+                    apply_broll_to_clip, clip_path, selected, temp_output
+                )
             if success and temp_output.exists():
                 temp_output.replace(clip_path)
                 logger.info(
