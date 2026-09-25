@@ -53,20 +53,20 @@ export function StatusStrip() {
 
   return (
     <div id="system-status-strip" className="border-t border-border bg-background">
-      <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-[11px] font-mono text-muted-foreground">
-        <span className="flex items-center gap-1.5">
+      <div className="max-w-6xl mx-auto px-4 py-2 flex flex-wrap items-center gap-x-6 gap-y-2 text-label uppercase font-mono text-muted-foreground">
+        <span className="flex items-center gap-2">
           <ListOrdered className="w-3.5 h-3.5" />
           QUEUE {status ? status.queue_depth : "—"}
         </span>
-        <span className="flex items-center gap-1.5">
+        <span className="flex items-center gap-2">
           <Activity className="w-3.5 h-3.5" />
           ACTIVE {status ? status.active_jobs : "—"}
         </span>
-        <span className="flex items-center gap-1.5">
+        <span className="flex items-center gap-2">
           <Cpu className="w-3.5 h-3.5" />
           GPU {status ? (status.gpu_enabled && status.gpu_available ? "ON" : status.gpu_enabled ? "UNAVAILABLE" : "OFF") : "—"}
         </span>
-        <span className={`flex items-center gap-1.5 ${diskLowSpace ? "text-foreground font-bold" : ""}`}>
+        <span className={`flex items-center gap-2 ${diskLowSpace ? "text-foreground font-bold" : ""}`}>
           <HardDrive className="w-3.5 h-3.5" />
           DISK {status ? `${formatBytes(status.disk_free_bytes)} free` : "—"}
         </span>

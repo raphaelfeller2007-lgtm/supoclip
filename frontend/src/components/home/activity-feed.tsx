@@ -29,13 +29,13 @@ export function ActivityFeed({ tasks }: { tasks: TaskSummary[] }) {
 
   return (
     <section>
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Activity</h2>
+      <h2 className="text-label uppercase text-muted-foreground mb-3">Activity</h2>
       <ul className="border border-border divide-y divide-border">
         {recent.map((task) => (
           <li key={task.id}>
             <Link
               href={`/tasks/${task.id}`}
-              className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs border-l-2 border-transparent hover:border-foreground transition-colors"
+              className="flex items-center justify-between gap-4 px-4 py-2 text-small border-l-2 border-transparent hover:border-foreground transition-colors"
             >
               <span className="truncate text-foreground">
                 <span className="text-muted-foreground">{STATUS_VERB[task.status] ?? task.status}</span>{" "}

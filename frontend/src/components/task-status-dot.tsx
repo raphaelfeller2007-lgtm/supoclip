@@ -1,6 +1,6 @@
 const STATUS_CONFIG: Record<string, { label: string; dotClass: string; textClass: string }> = {
-  completed: { label: "Completed", dotClass: "rounded-full bg-primary", textClass: "text-primary font-semibold" },
-  processing: { label: "Processing", dotClass: "rounded-full bg-foreground animate-pulse", textClass: "text-foreground font-semibold" },
+  completed: { label: "Completed", dotClass: "rounded-full bg-primary", textClass: "text-accent-ink font-bold" },
+  processing: { label: "Processing", dotClass: "rounded-full bg-foreground animate-pulse", textClass: "text-foreground font-bold" },
   queued: { label: "Queued", dotClass: "rounded-full bg-foreground", textClass: "text-foreground" },
   error: { label: "Error", dotClass: "bg-foreground", textClass: "text-foreground font-bold" },
   cancelled: { label: "Cancelled", dotClass: "rounded-full border border-foreground", textClass: "text-muted-foreground" },
@@ -13,7 +13,7 @@ const STATUS_CONFIG: Record<string, { label: string; dotClass: string; textClass
 export function TaskStatusDot({ status, className }: { status: string; className?: string }) {
   const config = STATUS_CONFIG[status] ?? { label: status, dotClass: "rounded-full border border-foreground", textClass: "text-muted-foreground" };
   return (
-    <span className={`inline-flex items-center gap-1.5 text-xs ${config.textClass} ${className ?? ""}`}>
+    <span className={`inline-flex items-center gap-2 text-small ${config.textClass} ${className ?? ""}`}>
       <span className={`w-1.5 h-1.5 ${config.dotClass}`} />
       {config.label}
     </span>

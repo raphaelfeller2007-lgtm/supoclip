@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import type { Tool } from "@/tools/types";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * One card in the home screen's Tools grid — the primary discovery surface
@@ -35,21 +36,21 @@ export function ToolCard({ tool, statusLabel }: { tool: Tool; statusLabel?: stri
     );
 
   return (
-    <div className="border border-border bg-background flex flex-col">
+    <div className="border border-border bg-background hover:border-foreground transition-colors flex flex-col">
       {thumbnail}
-      <div className="p-3 flex flex-col gap-2 flex-1">
-        <div className="flex items-center justify-between gap-2">
+      <div className="p-6 flex flex-col gap-4 flex-1">
+        <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 min-w-0">
-            <tool.icon className="w-4 h-4 text-muted-foreground shrink-0" />
-            <span className="text-sm font-semibold text-foreground truncate">{tool.name}</span>
+            <tool.icon className="w-5 h-5 text-muted-foreground shrink-0" />
+            <span className="text-title text-foreground truncate">{tool.name}</span>
           </div>
           {statusLabel && (
-            <span className="text-[11px] font-mono text-primary border border-primary px-1.5 py-0.5 shrink-0">
+            <Badge variant="outline" className="font-mono uppercase text-accent-ink border-accent-ink shrink-0">
               {statusLabel}
-            </span>
+            </Badge>
           )}
         </div>
-        <p className="text-xs text-muted-foreground leading-snug flex-1">{tool.description}</p>
+        <p className="text-small text-muted-foreground leading-snug flex-1">{tool.description}</p>
         {isActive ? (
           <Link href={tool.href!} className="w-full">
             <Button size="sm" variant="outline" className="w-full">

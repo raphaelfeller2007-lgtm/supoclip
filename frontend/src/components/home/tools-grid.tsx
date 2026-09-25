@@ -9,8 +9,8 @@ import { ToolCard } from "./tool-card";
 export function ToolsGrid({ processingCount }: { processingCount: number }) {
   return (
     <section>
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Tools</h2>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+      <h2 className="text-label uppercase text-muted-foreground mb-3">Tools</h2>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         {TOOLS.map((tool) => (
           <ToolCard
             key={tool.id}

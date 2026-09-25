@@ -93,15 +93,15 @@ export default function HomeApp() {
     >
       <ResumeBatchPrompt />
       {isDraggingFile && (
-        <div className="fixed inset-0 z-50 bg-background border-4 border-dashed border-primary flex flex-col items-center justify-center gap-3 pointer-events-none">
+        <div className="fixed inset-0 z-50 bg-background border-4 border-dashed border-primary flex flex-col items-center justify-center gap-4 pointer-events-none">
           <UploadCloud className="w-10 h-10 text-primary" />
-          <p className="text-sm font-semibold text-foreground">Drop to start a new clip</p>
+          <p className="text-title text-foreground">Drop to start a new clip</p>
         </div>
       )}
 
       <HomeTopBar />
 
-      <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col gap-8">
+      <div className="max-w-6xl mx-auto px-4 py-8 flex flex-col gap-12">
         <HeroActions lastProject={lastProject} />
         <RecentProjects tasks={tasks} isLoading={isLoading} />
         <ToolsGrid processingCount={processingCount} />

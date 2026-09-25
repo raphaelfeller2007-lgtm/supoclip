@@ -30,17 +30,15 @@ export function RecentProjects({
 
   return (
     <section>
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Recent Projects
-        </h2>
-        <Link href="/list" className="text-xs font-medium text-primary hover:underline">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-label uppercase text-muted-foreground">Recent Projects</h2>
+        <Link href="/list" className="text-small text-accent-ink hover:underline">
           View all
         </Link>
       </div>
 
       {isLoading && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-5">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-32 border border-border" />
           ))}
@@ -57,14 +55,14 @@ export function RecentProjects({
       )}
 
       {!isLoading && recent.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-5">
           {recent.map((task) => {
             const thumbnail = youTubeThumbnailUrl(task.source_url);
             return (
               <Link
                 key={task.id}
                 href={`/tasks/${task.id}`}
-                className="border border-border bg-background hover:border-primary transition-colors flex flex-col"
+                className="border border-border bg-background hover:border-foreground transition-colors flex flex-col"
               >
                 <div className="w-full h-16 border-b border-border flex items-center justify-center overflow-hidden">
                   {thumbnail ? (
@@ -75,8 +73,8 @@ export function RecentProjects({
                   )}
                 </div>
                 <div className="p-2 flex flex-col gap-1 flex-1">
-                  <p className="text-xs font-medium text-foreground truncate">{task.source_title}</p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-small font-bold text-foreground truncate">{task.source_title}</p>
+                  <p className="text-small text-muted-foreground">
                     {task.clips_count} {task.clips_count === 1 ? "clip" : "clips"} ·{" "}
                     {new Date(task.updated_at).toLocaleDateString(undefined, {
                       month: "short",

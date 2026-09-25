@@ -23,10 +23,10 @@ export function HomeTopBar() {
     <header className="sticky top-0 z-40 border-b border-border bg-background">
       <div className="max-w-6xl mx-auto px-4 h-12 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2">
-          <Image src="/logo.png" alt="SupoClip" width={20} height={20} className="rounded-sm" />
-          <span className="text-sm font-bold tracking-tight text-foreground">SupoClip</span>
+          <Image src="/logo.png" alt="SupoClip" width={24} height={24} className="rounded-sm" />
+          <span className="text-title text-foreground">SupoClip</span>
         </Link>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           <Link href="/">
             <Button
               variant="ghost"
