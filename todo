@@ -20,10 +20,6 @@ Priority 6:
 
 Using this design guide, improve our current design of supoclip- https://claude.ai/artifact/5EKqBUdaHBFMppVxzfnMGT.
 
-In Clipping rename 'Style' to captions'
-
-Make sure that everything is organised properly within clip generation (clipping process)
-
 Set up a local whisper model? Actually first, would it be better to use 
 
 The duration counter for how long video generation has elapsed includes time that was spent when paused.
