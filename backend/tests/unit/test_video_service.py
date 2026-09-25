@@ -1,4 +1,3 @@
-import contextlib
 import json
 from types import SimpleNamespace
 
@@ -6,11 +5,6 @@ import pytest
 
 from src.services import video_service as video_service_module
 from src.services.video_service import VideoService
-
-
-@contextlib.asynccontextmanager
-async def _noop_resource_slot(_name, _max_concurrent=1):
-    yield
 
 
 async def _run_inline(func, *args, **kwargs):
@@ -232,7 +226,6 @@ async def test_apply_broll_to_rendered_clip_reruns_size_cap_after_compositing(
         size_cap_calls.append(path)
         return False
 
-    monkeypatch.setattr(video_service_module, "resource_slot", _noop_resource_slot)
     monkeypatch.setattr(video_service_module, "run_in_thread", _run_inline)
     monkeypatch.setattr(
         video_service_module, "apply_broll_to_clip", fake_apply_broll_to_clip
@@ -251,3 +244,42 @@ async def test_apply_broll_to_rendered_clip_reruns_size_cap_after_compositing(
 
     assert size_cap_calls == [clip_path]
     assert clip_path.read_bytes() == b"composited clip bytes, larger now"
+
+
+@pytest.mark.asyncio
+async def test_apply_broll_to_rendered_clip_does_not_acquire_gpu_slot(
+    monkeypatch, tmp_path
+):
+    """insert_broll_into_clip's ffmpeg command hardcodes libx264 and never
+    touches the GPU/VRAM the "gpu" resource_slot protects, so B-roll
+    compositing must not serialize against real GPU renders/Ollama calls."""
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"original clip bytes")
+    broll_source = tmp_path / "broll.mp4"
+    broll_source.write_bytes(b"broll")
+
+    def fake_apply_broll_to_clip(_clip_path, _selected, temp_output):
+        temp_output.write_bytes(b"composited")
+        return True
+
+    def unexpected_resource_slot(*_args, **_kwargs):
+        raise AssertionError("apply_broll_to_rendered_clip must not touch resource_slot")
+
+    monkeypatch.setattr(video_service_module, "run_in_thread", _run_inline)
+    monkeypatch.setattr(
+        video_service_module, "apply_broll_to_clip", fake_apply_broll_to_clip
+    )
+    monkeypatch.setattr(video_service_module, "enforce_size_cap", lambda _path: False)
+    monkeypatch.setattr(video_service_module, "resource_slot", unexpected_resource_slot)
+
+    await VideoService.apply_broll_to_rendered_clip(
+        clip_path,
+        keep_ranges=[(0.0, 100.0)],
+        broll_suggestions=[
+            {"local_path": str(broll_source), "timestamp": 5.0, "duration": 2.0}
+        ],
+        max_insertions=3,
+        min_gap_seconds=6.0,
+    )
+
+    assert clip_path.read_bytes() == b"composited"
