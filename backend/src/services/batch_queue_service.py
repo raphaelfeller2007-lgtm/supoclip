@@ -168,6 +168,8 @@ class BatchQueueService:
                 social_overlay=template_settings.get("social_overlay"),
                 target_duration_seconds=template_settings.get("target_duration_seconds"),
                 max_clips=template_settings.get("max_clips"),
+                include_broll=bool(template_settings.get("include_broll", False)),
+                broll_settings=template_settings.get("broll_settings"),
             )
             if queue.get("auto_export_to_source"):
                 await self._auto_export_to_source(task_id, item)

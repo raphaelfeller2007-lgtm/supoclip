@@ -190,3 +190,48 @@ async def test_process_item_marks_error_on_failure_without_raising():
     ]
     assert len(error_calls) == 1
     assert "boom" in error_calls[0].kwargs["error_message"]
+
+
+async def test_process_item_forwards_include_broll_and_broll_settings_to_process_task():
+    """Regression test: a template with B-roll enabled created the task row
+    with include_broll=True (via create_task_with_source) but never forwarded
+    include_broll/broll_settings to process_task, so batch-processed videos
+    silently rendered with zero B-roll regardless of the template."""
+    service = _make_service()
+    item = {"id": "item-1", "source_filename": "a.mp4", "source_path": "upload://a"}
+    queue = {"user_id": "user-1", "auto_export_to_source": False}
+    template_settings = {
+        "include_broll": True,
+        "broll_settings": {"max_insertions": 2, "min_gap_seconds": 10.0},
+    }
+    service.repo.update_item_status = AsyncMock()
+
+    recorded = {}
+
+    class _RecordingTaskService:
+        def __init__(self, db):
+            self.video_service = AsyncMock()
+            self.video_service.determine_source_type = lambda path: "youtube"
+
+        async def create_task_with_source(self, *args, **kwargs):
+            recorded["create_task_with_source"] = kwargs
+            return "task-1"
+
+        async def process_task(self, *args, **kwargs):
+            recorded["process_task"] = kwargs
+
+    import src.services.batch_queue_service as module
+
+    original_task_service = module.TaskService
+    module.TaskService = _RecordingTaskService
+    try:
+        await service._process_item(item, queue, template_settings)
+    finally:
+        module.TaskService = original_task_service
+
+    assert recorded["create_task_with_source"]["include_broll"] is True
+    assert recorded["process_task"]["include_broll"] is True
+    assert recorded["process_task"]["broll_settings"] == {
+        "max_insertions": 2,
+        "min_gap_seconds": 10.0,
+    }
