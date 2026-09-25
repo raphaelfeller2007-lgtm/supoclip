@@ -239,6 +239,41 @@ def test_build_clip_keep_ranges_removes_boundary_silence(monkeypatch):
     assert keep_ranges == [(1.0, 1.6)]
 
 
+def test_build_clip_keep_ranges_protects_long_pause_before_punchline(monkeypatch):
+    """A pause of 1.2s+ ("obvious silence") sitting mid-sentence right
+    before a punchline word must still be protected -- verified against a
+    real transcript where this exact shape ("...kill all the funny [1.75s
+    pause] people?") was getting trimmed out of the middle of the joke
+    because the "obvious silence" floor bypassed the grammar-boundary
+    check unconditionally."""
+    transcript_data = {
+        "words": [
+            {"text": "kill", "start": 0, "end": 200},
+            {"text": "all", "start": 200, "end": 400},
+            {"text": "the", "start": 400, "end": 500},
+            {"text": "funny", "start": 500, "end": 700},
+            # 1.75s gap -- above _OBVIOUS_SILENCE_SECONDS (1.2s), and "funny"
+            # doesn't end a sentence, so only the emphatic-neighbor guard
+            # protects this.
+            {"text": 'people?"', "start": 2450, "end": 2800},
+            {"text": "So", "start": 2800, "end": 2950},
+        ]
+    }
+    monkeypatch.setattr(
+        "src.video_utils.load_cached_transcript_data",
+        lambda _video_path: transcript_data,
+    )
+
+    keep_ranges = build_clip_keep_ranges(
+        Path("/tmp/demo.mp4"),
+        0.0,
+        2.95,
+        {"cut_long_pauses": True, "pause_threshold_ms": 900, "filtered_words": []},
+    )
+
+    assert keep_ranges == [(0.0, 2.95)]
+
+
 def test_get_words_for_keep_ranges_retimes_words_into_output_timeline():
     transcript_data = {
         "words": [

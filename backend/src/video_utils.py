@@ -72,6 +72,7 @@ EMOJI_FONT_NAME = "Noto Color Emoji"
 CLIP_END_SENTENCE_EXTENSION_SECONDS = 3.0
 CLIP_END_PADDING_SECONDS = 0.35
 SENTENCE_END_RE = re.compile(r"""[.!?]["')\]}]*$""")
+EMPHATIC_END_RE = re.compile(r"""[!?]["')\]}]*$""")
 # Burned-in hook title (AI-written headline shown at the top of the clip while
 # the hook plays out). Long enough to read twice, gone before it feels stale.
 HOOK_TITLE_SECONDS = 4.0
@@ -1916,6 +1917,15 @@ def ass_fonts_dir(font_family: Optional[str]) -> Optional[Path]:
 
 def word_ends_sentence(text: str) -> bool:
     return bool(SENTENCE_END_RE.search((text or "").strip()))
+
+
+def word_is_emphatic_end(text: str) -> bool:
+    """True if the word ends on "!" or "?", allowing trailing closing quotes/
+    brackets (e.g. 'people?"') the way SENTENCE_END_RE does — a naive
+    ``.endswith(("!", "?"))`` misses these and was verified (on a real
+    transcript) to silently disable the neighbor-punctuation guards below.
+    """
+    return bool(EMPHATIC_END_RE.search((text or "").rstrip()))
 
 
 def extend_keep_ranges_to_sentence_boundary(
@@ -4649,21 +4659,32 @@ def _filler_span_changes_meaning(
     if end_idx_exclusive < len(relevant_words):
         neighbor_indices.append(end_idx_exclusive)
     for neighbor_idx in neighbor_indices:
-        neighbor_text = str(relevant_words[neighbor_idx].get("text", "")).rstrip()
-        if neighbor_text.endswith(("!", "?")):
+        neighbor_text = str(relevant_words[neighbor_idx].get("text", ""))
+        if word_is_emphatic_end(neighbor_text):
             return True
 
     return False
 
 
-def _pause_gap_is_safe_to_cut(prev_word_text: str, gap_seconds: float) -> bool:
+def _pause_gap_is_safe_to_cut(
+    prev_word_text: str, next_word_text: str, gap_seconds: float
+) -> bool:
     """Only cut an inter-word gap if it's at a sentence/phrase boundary, or
     it's long enough that it's obviously dead air regardless of grammar.
 
     Cutting on raw gap length alone (the old behavior) would remove ordinary
     mid-sentence breathing gaps at high sensitivity since ASR word-timestamp
     gaps and ordinary speech cadence overlap well below "obvious silence."
+
+    A pause landing right before a word that closes out an exclamation/
+    question is protected even past the "obvious silence" floor — that's
+    frequently a deliberate comedic beat (e.g. "...kill all the funny
+    [1.75s pause] people?"), not dead air, and unconditionally cutting it
+    was verified (against a real clip) to land the trim inside the
+    punchline itself rather than around it.
     """
+    if word_is_emphatic_end(next_word_text):
+        return False
     if gap_seconds >= _OBVIOUS_SILENCE_SECONDS:
         return True
     text = str(prev_word_text or "").rstrip()
@@ -4711,7 +4732,7 @@ def build_clip_keep_ranges(
         for current, nxt in zip(relevant_words, relevant_words[1:]):
             gap = nxt["start"] - current["end"]
             if gap >= pause_threshold_seconds and _pause_gap_is_safe_to_cut(
-                current.get("text", ""), gap
+                current.get("text", ""), nxt.get("text", ""), gap
             ):
                 removal_intervals.append((current["end"], nxt["start"]))
 
