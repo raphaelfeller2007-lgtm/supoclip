@@ -608,6 +608,18 @@ class VideoService:
                         logger.info(
                             "Ignoring cached transcript analysis with no clip segments"
                         )
+                    elif include_broll and not cached_analysis.get("broll_requested"):
+                        # The cache key doesn't vary on include_broll (only the
+                        # transcript itself is cache-key-relevant), so a cached
+                        # analysis from a run without B-roll would otherwise be
+                        # reused verbatim here and silently skip B-roll even
+                        # though this run explicitly asked for it. Re-run just
+                        # the analysis step (the transcript above is still
+                        # reused as-is).
+                        logger.info(
+                            "Cached transcript analysis predates B-roll being "
+                            "requested; re-analyzing instead of reusing it"
+                        )
                     else:
 
                         class _SimpleResult:
@@ -758,6 +770,7 @@ class VideoService:
                         else [],
                         "most_relevant_segments": segments_json,
                         "broll_opportunities": broll_opportunities_json,
+                        "broll_requested": include_broll,
                     }
                 ),
             }
