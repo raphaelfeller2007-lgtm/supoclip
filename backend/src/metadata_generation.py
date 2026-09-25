@@ -25,8 +25,8 @@ MAX_TAGS = 10
 METADATA_SYSTEM_PROMPT = """You write short-form video metadata: SEO-optimized titles, descriptions, and tags for viral short clips.
 
 For each clip, output:
-- title: 30-60 characters exactly (not a hard word count, but never shorter than 30 or longer than 60), SEO-optimized, short-form-platform-friendly (TikTok/Reels/Shorts style)
-- description: 50-100 characters, SEO-focused, no hashtags
+- title: 30-60 characters exactly (not a hard word count, but never shorter than 30 or longer than 60), SEO-optimized, short-form-platform-friendly (TikTok/Reels/Shorts style). Include exactly one emoji relevant to the clip's content, placed at whichever end of the title it reads most naturally — this is standard for short-form titles and the title is incomplete without one.
+- description: 50-100 characters, SEO-focused, no hashtags, no emoji
 - tags: exactly 5 to 10 short lowercase tags, never fewer than 5 (hyphenate multi-word tags, no spaces). Cover ALL of these dimensions, one tag each: content type (funny/educational/ranking/reaction/story/opinion), theme (free-form, e.g. football/sleep/finance), tone (serious/humorous/surprising/inspirational), hook_style (question/ranking/contrast/warning) — that is already 4 tags, then add 1-6 more free-form tags specific to the clip's subject to reach at least 5 total
 
 Keep the theme tag consistent across all clips in the same batch when they share a common subject.
@@ -34,13 +34,13 @@ Keep the theme tag consistent across all clips in the same batch when they share
 Examples of good output (for calibration only, not the actual clips to generate):
 
 Transcript: "So I tried waking up at 5am for 30 days straight and honestly the first week almost broke me..."
-{"title": "I Woke Up At 5AM For 30 Days Straight", "description": "The brutal first week of a 30-day 5am challenge", "tags": ["story", "productivity", "challenge", "self-improvement", "morning-routine"]}
+{"title": "I Woke Up At 5AM For 30 Days Straight ⏰", "description": "The brutal first week of a 30-day 5am challenge", "tags": ["story", "productivity", "challenge", "self-improvement", "morning-routine"]}
 
 Transcript: "Here's why your sourdough starter keeps dying: you're probably feeding it straight from the fridge..."
-{"title": "The #1 Reason Your Sourdough Starter Keeps Dying", "description": "Common sourdough starter mistake, fixed in under a minute", "tags": ["educational", "baking", "sourdough", "cooking-tips", "food"]}
+{"title": "🍞 The #1 Reason Your Sourdough Starter Keeps Dying", "description": "Common sourdough starter mistake, fixed in under a minute", "tags": ["educational", "baking", "sourdough", "cooking-tips", "food"]}
 
 Transcript: "Would you rather have unlimited money but no friends, or unlimited friends but no money? Comment below..."
-{"title": "Unlimited Money, No Friends... Or The Opposite?", "description": "A would-you-rather that's harder than it sounds", "tags": ["question", "would-you-rather", "opinion", "money", "relationships"]}
+{"title": "Unlimited Money, No Friends... Or The Opposite? 💸", "description": "A would-you-rather that's harder than it sounds", "tags": ["question", "would-you-rather", "opinion", "money", "relationships"]}
 
 Output ONLY the requested JSON — no explanation, no reasoning, no extra commentary."""
 
@@ -65,6 +65,34 @@ def truncate_at_word_boundary(text: str, max_len: int) -> str:
         return text
     truncated = text[:max_len].rsplit(" ", 1)[0]
     return truncated or text[:max_len]
+
+
+# Actual emoji codepoint blocks, deliberately excluding lookalike ranges (e.g.
+# Greek letters) — small local models asked for "an emoji" sometimes emit a
+# stray non-emoji symbol instead (observed with llama3.2:3b), which this must
+# not mistake for compliance.
+_EMOJI_RANGES = (
+    (0x1F300, 0x1FAFF),  # misc symbols/pictographs, emoticons, transport, supplemental symbols
+    (0x2600, 0x27BF),  # misc symbols & dingbats
+    (0x2B00, 0x2BFF),  # misc symbols and arrows (stars, etc.)
+    (0x1F1E6, 0x1F1FF),  # regional indicators (flag emoji)
+)
+_FALLBACK_TITLE_EMOJI = "🎬"
+
+
+def _contains_emoji(text: str) -> bool:
+    return any(lo <= ord(ch) <= hi for ch in text for lo, hi in _EMOJI_RANGES)
+
+
+def _ensure_title_emoji(title: str) -> str:
+    """The system prompt asks the model for exactly one emoji in the title,
+    but that instruction alone isn't reliable on weaker/local models — append
+    a generic fallback whenever the model's title didn't actually include a
+    real emoji, so the guarantee holds regardless of model quality."""
+    if _contains_emoji(title):
+        return title
+    room = TITLE_MAX_CHARS - len(_FALLBACK_TITLE_EMOJI) - 1
+    return f"{truncate_at_word_boundary(title, room)} {_FALLBACK_TITLE_EMOJI}"
 
 
 def normalize_tags(tags: List[str]) -> List[str]:
@@ -122,8 +150,9 @@ def _build_single_clip_prompt(video_title: Optional[str], clip: ClipContext) -> 
 
 
 def _normalize_clip_metadata(meta: ClipMetadata) -> ClipMetadata:
+    title = truncate_at_word_boundary(meta.title.strip(), TITLE_MAX_CHARS)
     return ClipMetadata(
-        title=truncate_at_word_boundary(meta.title.strip(), TITLE_MAX_CHARS),
+        title=_ensure_title_emoji(title),
         description=truncate_at_word_boundary(meta.description.strip(), DESCRIPTION_MAX_CHARS),
         tags=normalize_tags(meta.tags),
     )
