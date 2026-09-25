@@ -394,7 +394,7 @@ SCORING AND OUTPUT RULES:
 - virality_reasoning and reasoning should cite what is actually present in the chosen span
 - summary and key_topics must also stay grounded in the transcript and should not add outside interpretation
 
-Find as many compelling segments as the transcript genuinely supports, up to the maximum stated in the task instructions below. Bias toward inclusion: a clearly solid, watchable segment belongs in the results even if it isn't the single best moment in the video — creators would rather review an extra decent clip and discard it than have the AI silently withhold it. Reserve exclusion for segments that are genuinely unusable standalone (pure filler, sponsor reads, fragments needing unseen context) rather than merely "good but not exceptional." Every selected segment must still be accurate, self-contained, have proper time ranges, and score high on virality metrics."""
+Find as many compelling segments as the transcript genuinely supports, up to the maximum stated in the task instructions below. Bias toward inclusion: a clearly solid, watchable segment belongs in the results even if it isn't the single best moment in the video — creators would rather review an extra decent clip and discard it than have the AI silently withhold it. Reserve exclusion for segments that are genuinely unusable standalone (pure filler, sponsor reads, fragments needing unseen context) rather than merely "good but not exceptional." A segment does not need to score high on every virality subscore to qualify — a strong hook or strong value alone is enough if the segment is otherwise accurate, self-contained, and has proper time ranges. When you are unsure whether a segment clears the bar, include it rather than leave it out."""
 
 # Lazy-loaded agent to avoid import-time failures when API keys aren't set
 _transcript_agent: Optional[Agent[None, TranscriptAnalysis]] = None
@@ -787,6 +787,7 @@ Follow this workflow:
 
 Selection target:
 - Choose up to {max_segments} segments total. Lean toward returning close to {max_segments} whenever the transcript has that many distinct, watchable moments — a solid-but-not-spectacular segment is still worth including, since the creator can always discard clips they don't want, but a segment the AI never surfaced can't be recovered. Only return fewer than {max_segments} when the transcript genuinely runs out of distinct moments that clear the bar below.
+- Scan the entire transcript from the first timestamp to the last before finalizing your selection — do not stop once you have found a handful of strong moments early on. A long transcript's middle and final thirds are just as likely to contain good segments as its opening, and every section deserves the same scrutiny.
 - Do not pad with near-duplicate segments covering the same point, and do not include segments that fail the bar below — but do not hold back a clearly good, self-contained segment just because a "perfect" one already made the list.
 {duration_target_line}
 - Only choose a 15-24 second clip when it already contains a full setup and payoff.

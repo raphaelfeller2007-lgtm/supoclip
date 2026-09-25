@@ -182,6 +182,7 @@ SETTING_METADATA = {
             "gemini-3-flash-lite",
             "gemini-3.5-flash",
             "gemini-3-flash-preview",
+            "gemini-2.5-flash",
         ],
     },
 }

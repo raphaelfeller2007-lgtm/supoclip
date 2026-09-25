@@ -1421,6 +1421,30 @@ export default function VideoProcessingPage() {
                       </button>
                     ))}
                   </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={20}
+                      step={1}
+                      placeholder="Custom"
+                      value={clipCount !== null && ![3, 5, 7, 10].includes(clipCount) ? clipCount : ""}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === "") {
+                          setClipCount(null);
+                          return;
+                        }
+                        const parsed = Math.round(Number(raw));
+                        if (!Number.isNaN(parsed)) {
+                          setClipCount(Math.max(1, Math.min(20, parsed)));
+                        }
+                      }}
+                      disabled={isLoading}
+                      className="h-8 w-24 text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">Or type an exact number (1-20).</p>
+                  </div>
                   <p className="text-xs text-muted-foreground">How many clips the AI aims to produce from this video (quality still gates each pick).</p>
                 </div>
               </div>
