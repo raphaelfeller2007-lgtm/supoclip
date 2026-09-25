@@ -144,6 +144,7 @@ CREATE TABLE ranking_inputs (
 );
 
 CREATE INDEX idx_ranking_inputs_task_id ON ranking_inputs(task_id, order_index);
+CREATE INDEX idx_ranking_inputs_file_path_pattern ON ranking_inputs (file_path varchar_pattern_ops);
 
 -- A "folder" is a user-named batch of clips selected together (via a browser
 -- directory picker or a multi-file drop — there is no server filesystem path
@@ -177,6 +178,7 @@ CREATE TABLE ranking_folder_clips (
 );
 
 CREATE INDEX idx_ranking_folder_clips_folder_id ON ranking_folder_clips(folder_id, use_count);
+CREATE INDEX idx_ranking_folder_clips_file_path_pattern ON ranking_folder_clips (file_path varchar_pattern_ops);
 
 -- Tracked YouTube channels (public Data API lookup, no OAuth/login) and
 -- their synced videos/stats history, plus per-clip publish scheduling. See
@@ -355,6 +357,7 @@ CREATE INDEX idx_tasks_completed_at ON tasks(completed_at);
 CREATE INDEX idx_tasks_deleted_at ON tasks(deleted_at);
 CREATE UNIQUE INDEX idx_tasks_share_token ON tasks(share_token) WHERE share_token IS NOT NULL;
 CREATE INDEX idx_sources_created_at ON sources(created_at);
+CREATE INDEX idx_sources_url_pattern ON sources (url varchar_pattern_ops);
 CREATE INDEX idx_processing_cache_source_url ON processing_cache(source_url);
 CREATE INDEX idx_generated_clips_task_id ON generated_clips(task_id);
 CREATE INDEX idx_generated_clips_clip_order ON generated_clips(clip_order);
