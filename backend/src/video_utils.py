@@ -1194,8 +1194,10 @@ def dominant_face_cluster(
     face_centers: List[Tuple[int, int, int, float]],
     frame_width: int,
     gap_frac: float = 0.12,
+    dominance_ratio: float = 0.75,
 ) -> List[Tuple[int, int, int, float]]:
-    """Group detections by horizontal position and return only the dominant group.
+    """Group detections by horizontal position and, if one group clearly
+    dominates, return only that group.
 
     `filter_face_outliers` only drops wild single-frame misfires (>2 std-dev);
     it does nothing when a clip legitimately shows two people side by side,
@@ -1205,7 +1207,18 @@ def dominant_face_cluster(
     (comfortably bigger than one person's head jitter, smaller than the
     separation between two distinct people) and keeping only the
     highest-total-weight group keeps the crop locked onto a single,
-    consistently-framed subject.
+    consistently-framed subject in that case.
+
+    `face_centers` carries no per-detection timestamp, so this can't tell
+    "two people co-present the whole time" apart from "one subject who
+    moved partway through the clip" (a reframe, standing up) — the latter
+    would otherwise get half its own timeline's detections discarded as if
+    they were a different person. `dominance_ratio` hedges against that: a
+    split where the runner-up group still holds a substantial share of the
+    total weight is more consistent with sustained presence over time than
+    a couple of stray same-frame detections, so it's treated as ambiguous
+    and every detection is kept (falling back to the plain weighted
+    average) rather than confidently discarding half a moving subject.
     """
     if len(face_centers) <= 1 or frame_width <= 0:
         return face_centers
@@ -1223,7 +1236,21 @@ def dominant_face_cluster(
     if len(groups) == 1:
         return face_centers
 
-    dominant = max(groups, key=lambda g: sum(area * conf for _, _, area, conf in g))
+    weights = [sum(area * conf for _, _, area, conf in g) for g in groups]
+    total_weight = sum(weights)
+    dominant_index = max(range(len(groups)), key=lambda i: weights[i])
+    dominant = groups[dominant_index]
+
+    if total_weight <= 0 or weights[dominant_index] / total_weight < dominance_ratio:
+        logger.info(
+            "Face clusters too evenly split (%d cluster(s), top share %.0f%%) "
+            "to confidently pick one — keeping all %d detections",
+            len(groups),
+            (weights[dominant_index] / total_weight * 100) if total_weight > 0 else 0,
+            len(face_centers),
+        )
+        return face_centers
+
     logger.info(
         "Dominant face cluster: %d of %d detections across %d cluster(s)",
         len(dominant), len(face_centers), len(groups),

@@ -462,3 +462,18 @@ def test_dominant_face_cluster_keeps_single_persons_jitter_together():
     dominant = video_utils.dominant_face_cluster(faces, frame_width)
 
     assert dominant == faces
+
+
+def test_dominant_face_cluster_keeps_all_detections_for_a_roughly_even_split():
+    """Regression test: face_centers carries no per-detection timestamp, so
+    a single subject who moved from one side of the frame to the other
+    partway through the clip looks identical to two evenly-present people —
+    an even split must not confidently discard half the subject's own
+    timeline the way a clear (e.g. 5-vs-2) minority would be discarded."""
+    frame_width = 1920
+    first_half = [(300, 500, 40000, 0.9) for _ in range(4)]
+    second_half = [(1600, 520, 38000, 0.85) for _ in range(3)]
+
+    result = video_utils.dominant_face_cluster(first_half + second_half, frame_width)
+
+    assert result == first_half + second_half
