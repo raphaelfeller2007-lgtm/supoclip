@@ -478,8 +478,14 @@ class VideoService:
                 )
             elif temp_output.exists():
                 temp_output.unlink()
-        except Exception as e:
-            logger.error(f"Error applying B-roll to {clip_path.name}: {e}")
+        except Exception:
+            # Caller (TaskService.process_task) doesn't check a return value
+            # here, so a systematic failure (e.g. Redis unreachable for
+            # resource_slot, a malformed suggestion) would otherwise leave
+            # the task reporting success with B-roll silently never applied
+            # to any clip. logger.exception captures the full traceback so
+            # that failure is at least visible in the logs.
+            logger.exception(f"Error applying B-roll to {clip_path.name}; clip kept without it")
             if temp_output.exists():
                 temp_output.unlink()
 
