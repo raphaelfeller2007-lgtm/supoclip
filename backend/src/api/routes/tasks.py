@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from pathlib import Path
+from datetime import datetime
 import json
 import logging
 from typing import Dict, Any, Optional
@@ -1552,6 +1553,14 @@ async def resume_task(
             "queued",
             progress=0,
             progress_message="Re-queued by user",
+        )
+        # Clear the stale started_at from the previous (cancelled/errored) run —
+        # otherwise the elapsed-time counter on the task page keeps ticking from
+        # that old timestamp and shows the idle time spent cancelled as if the
+        # video were actively generating. process_task overwrites this again
+        # with a fresh timestamp once it actually starts.
+        await task_service.task_repo.update_task_runtime_metadata(
+            db, task_id, started_at=datetime.utcnow()
         )
 
         processing_mode = (
