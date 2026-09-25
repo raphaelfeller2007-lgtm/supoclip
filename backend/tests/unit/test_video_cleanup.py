@@ -274,6 +274,36 @@ def test_build_clip_keep_ranges_protects_long_pause_before_punchline(monkeypatch
     assert keep_ranges == [(0.0, 2.95)]
 
 
+def test_build_clip_keep_ranges_still_cuts_genuine_dead_air_before_a_question(monkeypatch):
+    """Regression test: the emphatic-neighbor guard must not protect a pause
+    of ANY length just because the next word ends in "?" — only up to
+    _MAX_EMPHATIC_PAUSE_PROTECTION_SECONDS. A 15s dead-air gap (e.g. a
+    buffering stall) is still obviously dead air even though "right?" ends
+    with a question mark."""
+    transcript_data = {
+        "words": [
+            {"text": "totally", "start": 0, "end": 200},
+            {"text": "fine", "start": 200, "end": 500},
+            # 15s gap -- far past both _OBVIOUS_SILENCE_SECONDS and the
+            # emphatic-pause protection ceiling.
+            {"text": "right?", "start": 15500, "end": 15900},
+        ]
+    }
+    monkeypatch.setattr(
+        "src.video_utils.load_cached_transcript_data",
+        lambda _video_path: transcript_data,
+    )
+
+    keep_ranges = build_clip_keep_ranges(
+        Path("/tmp/demo.mp4"),
+        0.0,
+        15.9,
+        {"cut_long_pauses": True, "pause_threshold_ms": 900, "filtered_words": []},
+    )
+
+    assert keep_ranges == [(0.0, 0.5), (15.5, 15.9)]
+
+
 def test_get_words_for_keep_ranges_retimes_words_into_output_timeline():
     transcript_data = {
         "words": [

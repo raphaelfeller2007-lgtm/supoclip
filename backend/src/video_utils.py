@@ -72,7 +72,7 @@ EMOJI_FONT_NAME = "Noto Color Emoji"
 CLIP_END_SENTENCE_EXTENSION_SECONDS = 3.0
 CLIP_END_PADDING_SECONDS = 0.35
 SENTENCE_END_RE = re.compile(r"""[.!?]["')\]}]*$""")
-EMPHATIC_END_RE = re.compile(r"""[!?]["')\]}]*$""")
+EMPHATIC_END_RE = re.compile(r"""[!?…]["')\]}]*$""")
 # Burned-in hook title (AI-written headline shown at the top of the clip while
 # the hook plays out). Long enough to read twice, gone before it feels stale.
 HOOK_TITLE_SECONDS = 4.0
@@ -1920,8 +1920,8 @@ def word_ends_sentence(text: str) -> bool:
 
 
 def word_is_emphatic_end(text: str) -> bool:
-    """True if the word ends on "!" or "?", allowing trailing closing quotes/
-    brackets (e.g. 'people?"') the way SENTENCE_END_RE does — a naive
+    """True if the word ends on "!", "?", or "…", allowing trailing closing
+    quotes/brackets (e.g. 'people?"') the way SENTENCE_END_RE does — a naive
     ``.endswith(("!", "?"))`` misses these and was verified (on a real
     transcript) to silently disable the neighbor-punctuation guards below.
     """
@@ -4677,13 +4677,20 @@ def _pause_gap_is_safe_to_cut(
     gaps and ordinary speech cadence overlap well below "obvious silence."
 
     A pause landing right before a word that closes out an exclamation/
-    question is protected even past the "obvious silence" floor — that's
-    frequently a deliberate comedic beat (e.g. "...kill all the funny
-    [1.75s pause] people?"), not dead air, and unconditionally cutting it
-    was verified (against a real clip) to land the trim inside the
-    punchline itself rather than around it.
+    question/trailing-off is protected even past the "obvious silence"
+    floor, up to _MAX_EMPHATIC_PAUSE_PROTECTION_SECONDS — that's frequently
+    a deliberate comedic beat (e.g. "...kill all the funny [1.75s pause]
+    people?"), not dead air, and unconditionally cutting it was verified
+    (against a real clip) to land the trim inside the punchline itself
+    rather than around it. The ceiling keeps this from swallowing genuine
+    long dead air (a buffering stall, an edited-out break) just because the
+    next word happens to end in "!"/"?"/"…" — the same override would
+    otherwise protect a pause of any length at all.
     """
-    if word_is_emphatic_end(next_word_text):
+    if (
+        gap_seconds < _MAX_EMPHATIC_PAUSE_PROTECTION_SECONDS
+        and word_is_emphatic_end(next_word_text)
+    ):
         return False
     if gap_seconds >= _OBVIOUS_SILENCE_SECONDS:
         return True
@@ -4694,6 +4701,12 @@ def _pause_gap_is_safe_to_cut(
 # A gap this long is safe to cut even mid-sentence — no continuous speech
 # pattern produces dead air this long, so grammar boundary checks are moot.
 _OBVIOUS_SILENCE_SECONDS = 1.2
+
+# Ceiling on how long a pause the emphatic-neighbor guard (above) can
+# protect — without one it would protect a pause of any length at all just
+# because the next word ends in "!"/"?"/"…", swallowing genuine long dead
+# air (a buffering stall, an edited-out break).
+_MAX_EMPHATIC_PAUSE_PROTECTION_SECONDS = 3 * _OBVIOUS_SILENCE_SECONDS
 
 
 def build_clip_keep_ranges(
