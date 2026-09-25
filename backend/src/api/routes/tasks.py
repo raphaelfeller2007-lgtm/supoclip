@@ -919,6 +919,13 @@ async def purge_task(
             raise HTTPException(
                 status_code=403, detail="Not authorized to purge this task"
             )
+        if not task.get("deleted_at"):
+            # Purge now also deletes the original uploaded source video (see
+            # TaskService.purge_task) — an unrecoverable action that must
+            # only ever run on a task the user has already moved to trash.
+            raise HTTPException(
+                status_code=400, detail="Task must be moved to trash before it can be purged"
+            )
 
         await task_service.purge_task(task_id)
 

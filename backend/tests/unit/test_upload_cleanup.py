@@ -49,6 +49,30 @@ async def test_purge_task_removes_uploaded_source_video(client, db_session, tmp_
 
 
 @pytest.mark.asyncio
+async def test_purge_task_rejects_a_task_that_is_not_trashed(client, db_session, tmp_path):
+    """Regression test: purge now also deletes the original uploaded source
+    video (an unrecoverable action) — it must refuse to run on a task that
+    hasn't been moved to trash first, not just on ownership/existence."""
+    get_config().temp_dir = str(tmp_path)
+
+    await create_user(db_session, user_id="local")
+    source = await create_source(
+        db_session,
+        title="Not-yet-trashed purge test",
+        source_type="video_url",
+        url="upload://not-trashed.mp4",
+    )
+    task = await create_task(
+        db_session, user_id="local", source_id=source["id"], status="completed"
+    )
+    task_id = task["id"]
+
+    purge_response = await client.delete(f"/tasks/{task_id}/purge")
+
+    assert purge_response.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_purge_task_leaves_youtube_source_alone(client, db_session, tmp_path):
     # YouTube sources are already cleaned up right after processing
     # (_cleanup_source_video) — purge must not try to touch anything for them.
