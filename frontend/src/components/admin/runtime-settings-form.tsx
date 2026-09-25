@@ -55,6 +55,17 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
   const [isSaving, setIsSaving] = useState(false);
   const [isPending, startTransition] = useTransition();
 
+  function setValue(key: string, value: string) {
+    setValues((current) => ({ ...current, [key]: value }));
+    // Picking/typing a value is an explicit choice to make it active now —
+    // without this, a value with a matching env var (e.g. DEFAULT_PROCESSING_MODE
+    // set in .env) silently keeps deferring to the env var until the user
+    // separately discovers and checks "Prefer saved", which reads as "didn't save".
+    if (value.trim()) {
+      setPriorityOverrides((current) => ({ ...current, [key]: true }));
+    }
+  }
+
   const hasChanges = useMemo(
     () =>
       Object.values(values).some((value) => value.trim()) ||
@@ -173,12 +184,7 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
                   <select
                     value={values[setting.key] ?? ""}
                     disabled={!!setting.disabled_reason}
-                    onChange={(event) =>
-                      setValues((current) => ({
-                        ...current,
-                        [setting.key]: event.target.value,
-                      }))
-                    }
+                    onChange={(event) => setValue(setting.key, event.target.value)}
                     className="w-full rounded-md border border-border px-3 py-2 text-sm text-foreground outline-none focus:border-ring disabled:cursor-not-allowed disabled:bg-background disabled:text-muted-foreground"
                   >
                     <option value="">
@@ -200,12 +206,7 @@ export function RuntimeSettingsForm({ settings, onSaved }: RuntimeSettingsFormPr
                 <input
                   type={setting.input_type}
                   value={values[setting.key] ?? ""}
-                  onChange={(event) =>
-                    setValues((current) => ({
-                      ...current,
-                      [setting.key]: event.target.value,
-                    }))
-                  }
+                  onChange={(event) => setValue(setting.key, event.target.value)}
                   placeholder={
                     setting.input_type === "password"
                       ? setting.configured
