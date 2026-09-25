@@ -908,6 +908,40 @@ def _extract_transcript_text(
     return " ".join(selected_text).strip()
 
 
+# _repair_segment_bounds only ever calls _extract_transcript_text with bounds
+# already snapped to real span edges, so "any overlap" is effectively "full
+# coverage" there. A caller feeding raw, unrepaired model bounds instead
+# (get_most_relevant_parts_by_transcript's fallback below) needs its own
+# check that the claimed range isn't mostly an untranscribed gap with only a
+# sliver of real speech at either edge — generous enough to cover the model
+# rounding to the nearest few seconds plus a natural trailing pause at a
+# clip's edge, tight enough to catch a claimed range that's mostly dead air.
+_MAX_UNGROUNDED_GAP_SECONDS = 20.0
+
+
+def _largest_ungrounded_gap_seconds(
+    transcript_spans: list[dict[str, Any]], start_seconds: int, end_seconds: int
+) -> float:
+    """Length of the single biggest stretch inside [start_seconds,
+    end_seconds) not covered by any transcript span."""
+    if end_seconds <= start_seconds:
+        return 0.0
+    covered = sorted(
+        (max(span["start"], start_seconds), min(span["end"], end_seconds))
+        for span in transcript_spans
+        if span["end"] > start_seconds and span["start"] < end_seconds
+    )
+    largest_gap = 0.0
+    cursor = start_seconds
+    for span_start, span_end in covered:
+        if span_start > cursor:
+            largest_gap = max(largest_gap, span_start - cursor)
+        cursor = max(cursor, span_end)
+    if end_seconds > cursor:
+        largest_gap = max(largest_gap, end_seconds - cursor)
+    return largest_gap
+
+
 def _choose_repaired_bounds(
     transcript_spans: list[dict[str, Any]], start_seconds: int, end_seconds: int
 ) -> tuple[int, int] | None:
@@ -1141,9 +1175,21 @@ async def get_most_relevant_parts_by_transcript(
                     # fully backed by real transcript content. Fall back to
                     # overlap-based extraction — the same one _repair_segment_bounds
                     # already uses — before concluding the range is fabricated.
-                    grounded_text = _extract_transcript_text(
-                        transcript_spans, start_seconds, end_seconds
-                    )
+                    # Unlike that caller, this range hasn't been snapped to
+                    # real span edges, so "any overlap" alone would accept a
+                    # long claimed range that's mostly an untranscribed gap
+                    # with only a sliver of real speech at either edge —
+                    # reject one with a single untranscribed stretch too
+                    # long to be just rounding/a trailing pause.
+                    if (
+                        _largest_ungrounded_gap_seconds(
+                            transcript_spans, start_seconds, end_seconds
+                        )
+                        <= _MAX_UNGROUNDED_GAP_SECONDS
+                    ):
+                        grounded_text = _extract_transcript_text(
+                            transcript_spans, start_seconds, end_seconds
+                        )
                 if not grounded_text:
                     logger.warning(
                         "Skipping segment with no transcript content in range: %s-%s",
