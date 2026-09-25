@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -81,3 +82,21 @@ async def test_resource_slot_times_out_when_never_freed():
     with pytest.raises(TimeoutError):
         async with resource_slot("render", 1, redis=redis, poll_interval_seconds=0.01, timeout_seconds=0.05):
             pass
+
+
+async def test_resource_slot_renews_ttl_so_a_long_held_operation_is_not_evicted():
+    """Regression test: without renewal, a holder outliving its own
+    ttl_seconds gets treated as "expired" and evicted by the next acquire
+    attempt, letting a second caller in while the first is still running."""
+    redis = _FakeSortedSetRedis()
+    async with resource_slot("gpu", 1, redis=redis, ttl_seconds=0.03):
+        # Outlive the original ttl_seconds by several renewal cycles
+        # (interval = ttl_seconds / 3) — without renewal this holder's entry
+        # would already have expired well before this point.
+        await asyncio.sleep(0.15)
+
+        contender = await acquire_slot("gpu", 1, redis=redis)
+        assert contender is None  # still held — renewal kept the original entry alive
+
+    freed = await acquire_slot("gpu", 1, redis=redis)
+    assert freed is not None  # released cleanly on exit

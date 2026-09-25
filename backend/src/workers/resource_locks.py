@@ -82,6 +82,15 @@ async def release_slot(name: str, holder_id: str, *, redis: Optional[ArqRedis] =
     await client.zrem(f"{_KEY_PREFIX}{name}", holder_id)
 
 
+async def _renew_slot(
+    name: str, holder_id: str, ttl_seconds: float, redis: ArqRedis
+) -> None:
+    """Push this holder's expiry back out — a plain `zadd` on a member the
+    caller already owns just updates its score, it can't create a second
+    slot occupant or exceed the limit."""
+    await redis.zadd(f"{_KEY_PREFIX}{name}", {holder_id: time.time() + ttl_seconds})
+
+
 @contextlib.asynccontextmanager
 async def resource_slot(
     name: str,
@@ -89,10 +98,18 @@ async def resource_slot(
     *,
     poll_interval_seconds: float = 1.0,
     timeout_seconds: float = 20 * 60,
+    ttl_seconds: float = DEFAULT_TTL_SECONDS,
     redis: Optional[ArqRedis] = None,
 ) -> AsyncIterator[None]:
     """Block (polling) until a slot named `name` is free, then hold it for the
     duration of the `async with` block, releasing it on exit (even on error).
+
+    A background task renews this holder's expiry at ttl_seconds/3 while the
+    block is held — without it, a render/LLM call that runs longer than
+    ttl_seconds would have its slot silently evicted (as "expired") by the
+    next caller's acquire_slot, letting a second render/LLM call proceed
+    concurrently while the first is still in flight, defeating the whole
+    point of this serialization.
     """
     import asyncio
 
@@ -100,14 +117,26 @@ async def resource_slot(
     holder_id = uuid.uuid4().hex
     deadline = time.time() + timeout_seconds
     while True:
-        acquired = await acquire_slot(name, max_concurrent, holder_id=holder_id, redis=client)
+        acquired = await acquire_slot(
+            name, max_concurrent, holder_id=holder_id, ttl_seconds=ttl_seconds, redis=client
+        )
         if acquired:
             break
         if time.time() >= deadline:
             raise TimeoutError(f"Timed out waiting for resource slot '{name}'")
         await asyncio.sleep(poll_interval_seconds)
 
+    async def _renew_periodically() -> None:
+        interval = ttl_seconds / 3
+        while True:
+            await asyncio.sleep(interval)
+            await _renew_slot(name, holder_id, ttl_seconds, client)
+
+    renew_task = asyncio.create_task(_renew_periodically())
     try:
         yield
     finally:
+        renew_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await renew_task
         await release_slot(name, holder_id, redis=client)
