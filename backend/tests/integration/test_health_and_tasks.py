@@ -3,7 +3,7 @@ import pytest
 from fastapi.routing import APIRoute
 from sqlalchemy import text
 
-from src.database import get_db
+from src.database import AsyncSessionLocal, get_db
 from tests.fixtures.factories import create_clip, create_source, create_task, create_user
 
 
@@ -112,6 +112,39 @@ async def test_create_task_enqueues_a_job(client, db_session, auth_headers):
     payload = response.json()
     assert payload["task_id"]
     assert payload["job_id"] == "job-test-1"
+
+
+@pytest.mark.asyncio
+async def test_create_task_coerces_include_broll_to_bool(client, db_session, auth_headers):
+    """Regression test: create_task read include_broll straight off the raw
+    request body with no coercion, unlike every sibling call site — a
+    non-bool truthy value must still end up stored as a real bool, not
+    whatever type/value the client happened to send."""
+    await create_user(db_session, user_id="user-1", email="owner@example.com")
+
+    response = await client.post(
+        "/tasks/",
+        headers=auth_headers,
+        json={
+            "source": {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+            "include_broll": "yes",
+        },
+    )
+
+    assert response.status_code == 200
+    task_id = response.json()["task_id"]
+
+    # A fresh AsyncSessionLocal() (same pattern test_upload_cleanup.py uses)
+    # rather than the fixture's own db_session — a raw read via the bare
+    # fixture session with nothing else touching the app afterward hits an
+    # unrelated, pre-existing asyncpg/event-loop teardown race in this test
+    # harness (reproduced independently of this feature; out of scope here).
+    async with AsyncSessionLocal() as read_session:
+        row = await read_session.execute(
+            text("SELECT include_broll FROM tasks WHERE id = :task_id"),
+            {"task_id": task_id},
+        )
+        assert row.scalar() is True
 
 
 @pytest.mark.asyncio

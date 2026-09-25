@@ -442,7 +442,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     font_size = _normalize_font_size(font_options.get("font_size"))
     font_color = _normalize_font_color(font_options.get("font_color"))
     caption_template = data.get("caption_template", "default")
-    include_broll = data.get("include_broll", False)
+    include_broll = bool(data.get("include_broll", False))
     runtime_config = get_config()
     processing_mode = data.get(
         "processing_mode", runtime_config.default_processing_mode
